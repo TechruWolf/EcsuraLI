@@ -1,0 +1,350 @@
+<!--
+MIT License
+
+Copyright (c) 2026 TechruWolf & Gemini (AI Collaborator)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-->
+
+<!--
+  Three.js (r128) - MIT License
+  Copyright © 2010-2021 Three.js Authors
+  https://github.com/mrdoob/three.js
+-->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EcsuraLI Web Control - Dynamic Registry</title>
+    <!-- Include Three.js library from CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #11111b;
+            --surface-color: #181825;
+            --overlay-color: #313244;
+            --text-color: #cdd6f4;
+            --green: #a6e3a1;
+            --red: #f38ba8;
+            --blue: #89b4fa;
+            --peach: #fab387;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        h1 {
+            margin-bottom: 5px;
+            color: var(--blue);
+        }
+
+        #status {
+            font-weight: bold;
+            margin-bottom: 20px;
+        }
+
+        /* === TAB NAVIGATION BAR === */
+        .tab-container {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid var(--overlay-color);
+            padding-bottom: 10px;
+            width: 100%;
+            max-width: 1400px;
+            justify-content: center;
+        }
+
+        .tab-btn {
+            background-color: var(--overlay-color);
+            color: var(--text-color);
+            border: none;
+            padding: 10px 20px;
+            font-size: 16px;
+            font-weight: bold;
+            border-radius: 8px;
+            cursor: pointer;
+            width: auto;
+            margin: 0;
+            transition: 0.3s;
+        }
+
+        .tab-btn:hover {
+            background-color: #45475a;
+        }
+
+        .tab-btn.active {
+            background-color: var(--blue);
+            color: var(--bg-color);
+        }
+
+        .tab-content {
+            display: none;
+            width: 100%;
+            max-width: 1400px;
+            justify-content: center;
+        }
+
+        .tab-content.active {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            justify-content: center;
+        }
+
+        .panel {
+            background-color: var(--surface-color);
+            border: 1px solid var(--overlay-color);
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            flex: 1;
+            min-width: 320px;
+            max-width: 450px;
+        }
+
+        .panel h3 {
+            margin-top: 0;
+            border-bottom: 1px solid var(--overlay-color);
+            padding-bottom: 8px;
+            color: var(--blue);
+        }
+
+        /* 3D Visualizer */
+        #canvas-container {
+            width: 100%;
+            height: 350px;
+            background-color: var(--bg-color);
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Controls & Buttons */
+        .control-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 14px;
+        }
+
+        input[type="range"], input[type="number"], select {
+            width: 100%;
+            padding: 8px;
+            background-color: var(--overlay-color);
+            border: 1px solid var(--overlay-color);
+            color: var(--text-color);
+            border-radius: 6px;
+            box-sizing: border-box;
+        }
+
+        button {
+            background-color: var(--blue);
+            color: var(--bg-color);
+            border: none;
+            padding: 10px 15px;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 5px;
+            transition: opacity 0.2s;
+        }
+
+        button:hover {
+            opacity: 0.9;
+        }
+
+        .btn-danger {
+            background-color: var(--red);
+            color: #fff;
+        }
+
+        .btn-warning {
+            background-color: var(--peach);
+            color: var(--bg-color);
+        }
+
+        /* Progress Bar */
+        .progress-bar-container {
+            width: 100%;
+            background-color: var(--overlay-color);
+            border-radius: 6px;
+            overflow: hidden;
+            height: 20px;
+            margin: 10px 0;
+        }
+
+        #progressBar {
+            width: 0%;
+            height: 100%;
+            background-color: var(--green);
+            transition: width 0.1s;
+        }
+
+        .info-text {
+            font-size: 13px;
+            color: #a6adc8;
+        }
+
+        #bufferWarning {
+            color: var(--peach);
+            font-weight: bold;
+            margin-top: 5px;
+        }
+
+        .coords-display {
+            display: flex;
+            justify-content: space-between;
+            background: var(--overlay-color);
+            padding: 8px;
+            border-radius: 6px;
+            margin-top: 10px;
+            font-family: monospace;
+        }
+
+        /* Settings Tab UI */
+        .config-card {
+            width: 100%;
+            max-width: 900px;
+            background: var(--surface-color);
+            padding: 25px;
+            border-radius: 12px;
+            border: 1px solid var(--overlay-color);
+        }
+
+        /* Dynamic Configuration Textarea */
+        #dynamicConfigJson {
+            width: 100%;
+            height: 350px;
+            background-color: #11111b;
+            color: #a6e3a1;
+            border: 1px solid var(--overlay-color);
+            border-radius: 8px;
+            padding: 12px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 14px;
+            box-sizing: border-box;
+            resize: vertical;
+            line-height: 1.4;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>EcsuraLI Control</h1>
+    <div id="status">Connecting to WebSocket...</div>
+
+    <!-- === TAB NAVIGATION === -->
+    <div class="tab-container">
+        <button class="tab-btn active" onclick="switchTab('controlTab', this)">🎮 Control</button>
+        <button class="tab-btn" onclick="switchTab('settingsTab', this)">⚙️ Hardware Config</button>
+    </div>
+
+    <!-- === TAB 1: CONTROL & PRINT === -->
+    <div id="controlTab" class="tab-content active">
+        <!-- PANEL 1: 3D SIMULATOR & DYNAMIC STATUS -->
+        <div class="panel">
+            <h3>3D Space Visualizer</h3>
+            <div id="canvas-container"></div>
+
+            <!-- Dynamic Coordinates Display (Auto-populated by app.js) -->
+            <div class="coords-display" id="dynamicCoordsContainer" style="display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-around;">
+                <span style="color: #a6adc8; font-style: italic;">Loading axes coordinates...</span>
+            </div>
+        </div>
+
+        <!-- PANEL 2: THERMAL / PWM DEVICES & DYNAMIC JOG CONTROL -->
+        <div class="panel">
+            <h3>THERMAL / PWM Devices</h3>
+            <div id="dynamicTempContainer" style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 15px;">
+                <span style="color: #a6adc8; font-style: italic;">Loading PWM/PID devices...</span>
+            </div>
+            <button onclick="turnOffAllPWM()" class="btn-warning">🛑 Turn Off All PWM / Heaters</button>
+
+            <h3 style="margin-top: 25px;">Manual Jog Control</h3>
+            <div class="control-group">
+                <label>Step increment (mm):</label>
+                <input type="number" id="jogStep" value="10" step="1">
+            </div>
+
+            <div id="dynamicJogContainer">
+                <p style="color: #a6adc8; font-style: italic;">Loading axis list from hardware...</p>
+            </div>
+        </div>
+
+        <!-- PANEL 3: G-CODE STREAM & EMERGENCY -->
+        <div class="panel">
+            <h3>G-Code File Stream</h3>
+            <div class="control-group">
+                <label>Select G-code file:</label>
+                <input type="file" id="gcodeFile" accept=".gcode,.g">
+            </div>
+            <button onclick="processAndStreamGCode()" style="background-color: var(--green); color: var(--bg-color);">Start Parsing & Streaming</button>
+
+            <div class="progress-bar-container">
+                <div id="progressBar"></div>
+            </div>
+            <div id="progressText" class="info-text">Progress: 0%</div>
+            <div id="lineInfo" class="info-text">0 / 0 lines</div>
+            <div id="streamInfo" class="info-text" style="margin-top: 8px; color: var(--text-color);">Status: Ready</div>
+            <div id="bufferWarning"></div>
+
+            <h3 style="margin-top: 30px;">Emergency System</h3>
+            <button id="emgBtn" onclick="emergencyStop()" class="btn-danger">🛑 EMERGENCY STOP</button>
+        </div>
+    </div>
+
+    <!-- TAB HARDWARE CONFIG -->
+    <div id="settingsTab" class="tab-content config-card">
+        <h2>🧩 Universal Hardware ECS Configurator (Runtime RAM)</h2>
+        <p style="color: #a6e3a1; font-size: 14px;">Add, remove, or customize motor axes, PWM/PID thermal devices, or GPIOs on the fly without reflashing the Flash memory!</p>
+
+        <div style="margin: 15px 0;">
+            <button onclick="addNewHardwareEntity()" style="padding: 8px 16px; background: #a6e3a1; color: #11111b; border: none; border-radius: 6px; font-weight: bold; cursor: pointer;">➕ Add New Device / Axis</button>
+            <button onclick="saveDynamicRegistryVisual()" style="padding: 8px 16px; background: #89b4fa; color: #11111b; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; margin-left: 10px;">💾 Save Configuration (Runtime RAM) </button>
+            <span id="configStatusMsg" style="margin-left: 15px; font-weight: bold;"></span>
+        </div>
+
+        <!-- CONTAINER FOR HARDWARE CARDS  -->
+        <div id="visualConfigContainer" style="display: flex; flex-direction: column; gap: 12px; margin-top: 15px;">
+            <!-- Hardware configuration cards will be rendered dynamically here  -->
+        </div>
+
+        <!-- Hidden JSON Textarea for background data sync  -->
+        <textarea id="dynamicConfigJson" style="display:none;"></textarea>
+    </div>
+
+    <!-- Link app.js script -->
+    <script src="app.js"></script>
+</body>
+</html>
