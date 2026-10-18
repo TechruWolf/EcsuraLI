@@ -7,7 +7,9 @@ void executeMotion() {
     std::vector<int> axisIndices;
     portENTER_CRITICAL(&hardwareMux);
     for (size_t i = 0; i < hardwareEntities.size(); i++) {
-        if (isAxisDevice(hardwareEntities[i].type)) axisIndices.push_back(i);
+        if (!hardwareEntities[i].pins.empty() && hardwareEntities[i].pins[0] != -1) {
+            axisIndices.push_back(i);
+        }
     }
     portEXIT_CRITICAL(&hardwareMux);
 
@@ -36,21 +38,20 @@ void executeMotion() {
             return (ent.pins.size() > pIdx) ? ent.pins[pIdx] : -1;
         };
         auto getParam = [&](size_t prIdx, float defVal) -> float {
-            return (ent.params.size() > prIdx && ent.params[prIdx] > 0.0f) ? ent.params[prIdx] : defVal;
+            return (ent.params.size() > prIdx) ? ent.params[prIdx] : defVal;
         };
 
         axes[i] = {
             idx,
-            getPin(0),
-            getPin(1),
-            getPin(3),
-            getPin(4),
-            getParam(0, 80.0f),
-            getParam(1, 999999.0f),
-            getParam(2, 2.0f),
-            (int32_t)getParam(3, 0.0f),
-            (int32_t)getParam(4, 0.0f),
-            ent.type
+            getPin(0), // stepPin
+            getPin(1), // dirPin
+            getPin(3), // minPin
+            getPin(4), // maxPin
+            getParam(0, 80.0f),       // stepsPerUnit
+            getParam(1, -1.0f),       // maxLimit
+            getParam(2, 2.0f),        // minStepDelay
+            (int32_t)getParam(3, 0.0f), // homingBackoffSteps
+            (int32_t)getParam(4, 0.0f), // homingPostOffset
         };
 
         if (axes[i].minStepDelay > (float)global_min_delay) {
@@ -66,7 +67,8 @@ void executeMotion() {
     for (size_t i = 0; i < numAxes; i++) {
         if (axes[i].dirPin == -1) continue;
 
-        if (s[i] == -1 && (axes[i].type == DEVICE_AXIS_LINEAR_LIMITED || axes[i].type == DEVICE_AXIS_ROTARY_LIMITED)) {
+        bool has_physical_min = (axes[i].minPin != -1);
+        if (s[i] == -1 && has_physical_min) {
             is_homing[i] = true;
             digitalWrite(axes[i].dirPin, LOW);
             d[i] = 1000000;
@@ -75,22 +77,16 @@ void executeMotion() {
             digitalWrite(axes[i].dirPin, stepDir == 1 ? HIGH : LOW);
             int32_t req_steps = abs(s[i]);
 
-            if (axes[i].type == DEVICE_AXIS_LINEAR_LIMITED || axes[i].type == DEVICE_AXIS_ROTARY_LIMITED) {
+            bool has_virtual = (axes[i].maxLimit > 0.0f && axes[i].maxLimit != -1.0f);
+            if (has_virtual) {
                 portENTER_CRITICAL(&hardwareMux);
                 int32_t current_pos = hardwareEntities[axes[i].entIdx].runtimeState1;
                 portEXIT_CRITICAL(&hardwareMux);
 
                 int32_t max_limit_steps = (int32_t)(axes[i].maxLimit * axes[i].stepsPerUnit);
-
-                if (stepDir > 0) {
-                    int32_t allowed = max_limit_steps - current_pos;
-                    if (allowed < 0) allowed = 0;
-                    if (req_steps > allowed) req_steps = allowed;
-                } else {
-                    int32_t allowed = current_pos;
-                    if (allowed < 0) allowed = 0;
-                    if (req_steps > allowed) req_steps = allowed;
-                }
+                int32_t allowed = (stepDir > 0) ? (max_limit_steps - current_pos) : current_pos;
+                if (allowed < 0) allowed = 0;
+                if (req_steps > allowed) req_steps = allowed;
             }
             d[i] = req_steps;
         }
@@ -140,9 +136,10 @@ void executeMotion() {
                 all_done = false;
                 int32_t direction = (s[a] < 0 || is_homing[a]) ? -1 : 1;
 
-                if (axes[a].type == DEVICE_AXIS_LINEAR_LIMITED || axes[a].type == DEVICE_AXIS_ROTARY_LIMITED) {
-                    bool physical_tripped = (direction < 0) ? (axes[a].minPin != -1 && digitalRead(axes[a].minPin) == LOW)
-                                                            : (axes[a].maxPin != -1 && digitalRead(axes[a].maxPin) == LOW);
+                bool has_physical_endstop = (direction < 0 && axes[a].minPin != -1) || (direction > 0 && axes[a].maxPin != -1);
+                if (has_physical_endstop) {
+                    bool physical_tripped = (direction < 0) ? (digitalRead(axes[a].minPin) == LOW)
+                    : (digitalRead(axes[a].maxPin) == LOW);
 
                     if (physical_tripped) {
                         remaining_d[a] = 0;
@@ -179,7 +176,8 @@ void executeMotion() {
                     volatile int32_t &pos = hardwareEntities[axes[a].entIdx].runtimeState1;
                     pos += stepDir;
 
-                    if (axes[a].type == DEVICE_AXIS_ROTARY_UNLIMITED && axes[a].maxLimit < 999999.0f && axes[a].stepsPerUnit > 0) {
+                    bool has_virtual = (axes[a].maxLimit > 0.0f && axes[a].maxLimit != -1.0f);
+                    if (has_virtual && axes[a].minPin == -1 && axes[a].maxPin == -1) {
                         int32_t wrap = (int32_t)(axes[a].maxLimit * axes[a].stepsPerUnit);
                         if (wrap > 0) {
                             if (pos >= wrap) pos -= wrap;

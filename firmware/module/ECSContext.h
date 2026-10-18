@@ -4,20 +4,14 @@
 #pragma once
 
 enum DeviceType {
-    DEVICE_AXIS_LINEAR_LIMITED = 0,
-    DEVICE_PWM = 1,
-    DEVICE_GPIO =2,
-    DEVICE_AXIS_LINEAR_UNLIMITED = 4,
-    DEVICE_AXIS_ROTARY_LIMITED = 5,
-    DEVICE_AXIS_ROTARY_UNLIMITED = 6,
-    DEVICE_PIPELINE = 7
+    DEVICE_AXIS = 0,
+    DEVICE_PWM_SENSOR = 1,
+    DEVICE_GPIO = 2,
+    DEVICE_PIPELINE = 3
 };
 
 inline bool isAxisDevice(DeviceType type) {
-    return (type == DEVICE_AXIS_LINEAR_LIMITED ||
-            type == DEVICE_AXIS_LINEAR_UNLIMITED ||
-            type == DEVICE_AXIS_ROTARY_LIMITED ||
-            type == DEVICE_AXIS_ROTARY_UNLIMITED);
+    return (type == DEVICE_AXIS);
 }
 
 struct HardwareEntity {
@@ -26,24 +20,35 @@ struct HardwareEntity {
     std::vector<int8_t> pins;
     std::vector<float> params;
 
-    // Runtime States
     volatile int32_t runtimeState1;
     float runtimeState2;
     float runtimeState3;
 
     HardwareEntity(String n, DeviceType t, std::vector<int8_t> p, std::vector<float> pr, int32_t r1, float r2, float r3)
-        : name(n), type(t), pins(p), params(pr), runtimeState1(r1), runtimeState2(r2), runtimeState3(r3) {}
+    : name(n), type(t), pins(p), params(pr), runtimeState1(r1), runtimeState2(r2), runtimeState3(r3) {}
 };
 
 struct MotionBufferECS {
-    uint32_t* time_units;
-    int32_t** steps_matrix;
-    size_t numAxes;
+    uint32_t* time_units = nullptr;
+    int32_t** steps_matrix = nullptr;
+    size_t numAxes = 0;
 
     volatile size_t head = 0;
     volatile size_t tail = 0;
 
     void init(size_t axesCount) {
+        if (steps_matrix != nullptr) {
+            for (size_t i = 0; i < MOTION_BUFFER_SIZE; i++) {
+                delete[] steps_matrix[i];
+            }
+            delete[] steps_matrix;
+            steps_matrix = nullptr;
+        }
+        if (time_units != nullptr) {
+            delete[] time_units;
+            time_units = nullptr;
+        }
+
         numAxes = axesCount;
         time_units = new uint32_t[MOTION_BUFFER_SIZE];
         steps_matrix = new int32_t*[MOTION_BUFFER_SIZE];
@@ -90,7 +95,6 @@ struct AxisContext {
     float stepsPerUnit, maxLimit, minStepDelay;
     int32_t homingBackoff;
     int32_t homingPostOffset;
-    DeviceType type;
 };
 
 Preferences preferences;

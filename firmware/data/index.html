@@ -45,7 +45,20 @@
 
         #status {
             font-weight: bold;
+            margin-bottom: 15px;
+        }
+
+        /* === SYSTEM DASHBOARD PANEL === */
+        #systemDashboardContainer {
+            width: 100%;
+            max-width: 1400px;
+            background-color: var(--surface-color);
+            border: 1px solid var(--overlay-color);
+            border-radius: 12px;
+            padding: 15px 20px;
+            box-sizing: border-box;
             margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
         }
 
         /* === TAB NAVIGATION BAR === */
@@ -242,6 +255,31 @@
 
     <h1>EcsuraLI Control</h1>
     <div id="status">Connecting to WebSocket...</div>
+
+    <!-- === SYSTEM DASHBOARD (CPU & RAM) === -->
+    <div id="systemDashboardContainer">
+        <div style="font-weight: bold; color: #89b4fa; margin-bottom: 8px; font-size: 13px;">🖥️ MCU System Dashboard</div>
+        <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+            <div style="flex: 1; min-width: 250px;">
+                <div style="display: flex; justify-content: space-between; font-size: 11px; color: #cdd6f4; margin-bottom: 3px;">
+                    <span>⚡ System Load (Loop Time):</span>
+                    <strong id="cpuLoadText">0.00 ms (0.0%)</strong>
+                </div>
+                <div style="width: 100%; background: var(--overlay-color); border-radius: 4px; overflow: hidden; height: 8px;">
+                    <div id="cpuBar" style="width: 0%; background: var(--green); height: 100%; transition: width 0.2s ease;"></div>
+                </div>
+            </div>
+            <div style="flex: 1; min-width: 250px;">
+                <div style="display: flex; justify-content: space-between; font-size: 11px; color: #cdd6f4; margin-bottom: 3px;">
+                    <span>💾 Free RAM:</span>
+                    <strong id="ramText">0.0 KB / 0.0 KB (0.0%)</strong>
+                </div>
+                <div style="width: 100%; background: var(--overlay-color); border-radius: 4px; overflow: hidden; height: 8px;">
+                    <div id="ramBar" style="width: 0%; background: var(--green); height: 100%; transition: width 0.2s ease;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- === TAB NAVIGATION === -->
     <div class="tab-container">
