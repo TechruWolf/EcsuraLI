@@ -84,6 +84,22 @@
 // - params[3] : (Reserved)
 // ==========================================
 
+// ==========================================
+// 5. DEVICE_VAR (Virtual Variable / Data Source)
+// ==========================================
+// PIN MAPPING & MODES:
+// - Pin[0] : Mode Selection
+//            0: Normal / Input Variable (Default)
+//            1: System Uptime (ms)
+//            2: Random Number Generator
+//
+// PARAMS MAPPING:
+// - params[0] : Current Value (Active stored value)
+// - params[1] : Min Limit (Lower bound for Random mode)
+// - params[2] : Max Limit (Upper bound for Random mode)
+// - params[3] : (Reserved)
+// ==========================================
+
 inline std::vector<HardwareEntity> hardwareEntities = {
     //Name                   Type                          Pins                             Params                                                          Runtime States
     { "X",          DEVICE_AXIS,    {13, 12,  6, 48, -1},    {80.0f, 350.0f, 25.0f,  6800.0f,  0.0f, 0.0f},                                           0,    0.0f,   0.0f },
@@ -95,7 +111,7 @@ inline std::vector<HardwareEntity> hardwareEntities = {
     { "DOOR_SW",    DEVICE_GPIO,                {2},                     {0.0f,   0.0f,  0.0f,  0.0f,   0.0f},                                           0,    0.0f,   0.0f }
 };
 
-inline const char* WIFI_SSID = "Your_SSID";
+inline const char* WIFI_SSID = "YOUR_SSID";
 inline const char* WIFI_PASS = "Gugugaga ?";
 
 inline void initHardwareECS() {

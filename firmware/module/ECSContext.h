@@ -7,7 +7,8 @@ enum DeviceType {
     DEVICE_AXIS = 0,
     DEVICE_PWM_SENSOR = 1,
     DEVICE_GPIO = 2,
-    DEVICE_PIPELINE = 3
+    DEVICE_PIPELINE = 3,
+    DEVICE_VAR = 4
 };
 
 inline bool isAxisDevice(DeviceType type) {

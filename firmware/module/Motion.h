@@ -30,7 +30,7 @@ inline float getSCurveFactor(int32_t index, int32_t total_steps) {
 
 void executeMotion() {
     std::vector<int> axisIndices;
-    portENTER_CRITICAL(&hardwareMux);
+    SYS_ENTER_CRITICAL();
     size_t totalEntities = hardwareEntities.size();
     for (size_t i = 0; i < totalEntities; i++) {
         const auto& ent = hardwareEntities[i];
@@ -38,7 +38,7 @@ void executeMotion() {
             axisIndices.push_back(i);
         }
     }
-    portEXIT_CRITICAL(&hardwareMux);
+    SYS_EXIT_CRITICAL();
 
     if (axisIndices.empty()) return;
     size_t numAxes = axisIndices.size();
@@ -52,7 +52,7 @@ void executeMotion() {
     }
 
     size_t available_blocks = motionPipeline.count();
-    size_t fetch_count = std::min(available_blocks, LOOK_AHEAD_COUNT);
+    size_t fetch_count = std::min(available_blocks, (size_t)LOOK_AHEAD_COUNT);
 
     for (size_t i = 0; i < fetch_count; i++) {
         uint32_t bt;
@@ -105,7 +105,7 @@ void executeMotion() {
     for (size_t i = 0; i < numAxes; i++) {
         int idx = axisIndices[i];
 
-        portENTER_CRITICAL(&hardwareMux);
+        SYS_ENTER_CRITICAL();
         const auto& ent = hardwareEntities[idx];
         int8_t stepPin = (ent.pins.size() > 0) ? ent.pins[0] : -1;
         int8_t dirPin  = (ent.pins.size() > 1) ? ent.pins[1] : -1;
@@ -120,7 +120,7 @@ void executeMotion() {
 
         bool mInit = (minPin != -1 && ent.params.size() > 5) ? (bool)ent.params[5] : true;
         bool xInit = (maxPin != -1 && ent.params.size() > 6) ? (bool)ent.params[6] : true;
-        portEXIT_CRITICAL(&hardwareMux);
+        SYS_EXIT_CRITICAL();
 
         axes[i] = {idx, stepPin, dirPin, minPin, maxPin, stepsPerUnit, maxLimit, minStepDelay, homingBack, homingPost, mInit, xInit};
 
@@ -148,9 +148,9 @@ void executeMotion() {
 
             bool has_virtual = (axes[i].maxLimit > 0.0f && axes[i].maxLimit != -1.0f);
             if (has_virtual) {
-                portENTER_CRITICAL(&hardwareMux);
+                SYS_ENTER_CRITICAL();
                 int32_t current_pos = hardwareEntities[axes[i].entIdx].runtimeState1;
-                portEXIT_CRITICAL(&hardwareMux);
+                SYS_EXIT_CRITICAL();
 
                 int32_t max_limit_steps = (int32_t)(axes[i].maxLimit * axes[i].stepsPerUnit);
                 int32_t allowed = (stepDir > 0) ? (max_limit_steps - current_pos) : current_pos;
@@ -233,9 +233,9 @@ void executeMotion() {
                             runHomingSteps(axes[a].stepPin, axes[a].dirPin, axes[a].homingBackoff, (uint32_t)axes[a].minStepDelay);
                             runHomingSteps(axes[a].stepPin, axes[a].dirPin, axes[a].homingPostOffset, (uint32_t)axes[a].minStepDelay);
 
-                            portENTER_CRITICAL(&hardwareMux);
+                            SYS_ENTER_CRITICAL();
                             hardwareEntities[axes[a].entIdx].runtimeState1 = 0;
-                            portEXIT_CRITICAL(&hardwareMux);
+                            SYS_EXIT_CRITICAL();
                         }
                         continue;
                     }
@@ -249,7 +249,7 @@ void executeMotion() {
                     digitalWrite(axes[a].stepPin, HIGH);
 
                     int32_t stepDir = (s[a] >= 0 && !is_homing[a]) ? 1 : -1;
-                    portENTER_CRITICAL(&hardwareMux);
+                    SYS_ENTER_CRITICAL();
                     volatile int32_t &pos = hardwareEntities[axes[a].entIdx].runtimeState1;
                     pos += stepDir;
 
@@ -264,7 +264,7 @@ void executeMotion() {
                             remaining_d[a] = 0;
                         }
                     }
-                    portEXIT_CRITICAL(&hardwareMux);
+                    SYS_EXIT_CRITICAL();
 
                     SYS_DELAY_US((uint32_t)axes[a].minStepDelay);
                     digitalWrite(axes[a].stepPin, LOW);

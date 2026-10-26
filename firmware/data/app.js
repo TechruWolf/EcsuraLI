@@ -25,6 +25,7 @@ const DEVICE_AXIS = 0;
 const DEVICE_PWM_SENSOR = 1;
 const DEVICE_GPIO = 2;
 const DEVICE_PIPELINE = 3;
+const DEVICE_VAR = 4;
 
 const isAxisDeviceJS = (type) => (type === DEVICE_AXIS);
 const isHomableAxisJS = (ent) => {
@@ -169,6 +170,29 @@ ws.onmessage = (event) => {
                 axisPositionsMap[ent.name] = val;
                 const posEl = document.getElementById(`pos_${ent.name}`);
                 if (posEl) posEl.innerText = val.toFixed(1);
+                partIdx++;
+            }
+        });
+
+        hardwareRegistry.forEach((ent, index) => {
+            if (ent.type === DEVICE_VAR) {
+                const varMode = (ent.pins && ent.pins.length > 0) ? ent.pins[0] : 0;
+
+                if (parts[partIdx] !== undefined) {
+                    const val = parseFloat(parts[partIdx]);
+
+                    if (varMode === 0) {
+                        const inputEl = document.getElementById(`input_var_${index}`);
+                        if (inputEl && document.activeElement !== inputEl) {
+                            inputEl.value = val.toFixed(2);
+                        }
+                    } else {
+                        const valSpan = document.getElementById(`var_val_${index}`);
+                        if (valSpan) {
+                            valSpan.innerText = val.toFixed(2);
+                        }
+                    }
+                }
                 partIdx++;
             }
         });
@@ -431,6 +455,52 @@ function buildDynamicUI() {
         pipelineContainer.innerHTML = pipelineHtml;
     }
 
+    // 6. Render Virtual Variables
+    let varContainer = document.getElementById('dynamicVarContainer');
+    if (!varContainer) {
+        const gpioContainer = document.getElementById('dynamicGPIOContainer');
+        if (gpioContainer) {
+            varContainer = document.createElement('div');
+            varContainer.id = 'dynamicVarContainer';
+            varContainer.style.cssText = "margin-top: 15px;";
+            gpioContainer.parentNode.insertBefore(varContainer, gpioContainer.nextSibling);
+        }
+    }
+
+    if (varContainer) {
+        let varHtml = '<span style="font-weight:bold; color:var(--blue); font-size:13px;">🔧 Virtual Variables</span>';
+        let hasVar = false;
+
+        hardwareRegistry.forEach((ent, index) => {
+            if (ent.type === DEVICE_VAR) {
+                hasVar = true;
+                const varMode = (ent.pins && ent.pins.length > 0) ? ent.pins[0] : 0;
+                const currentValue = (ent.params && ent.params.length > 0) ? ent.params[0] : 0.0;
+
+                let controlHtml = '';
+                if (varMode === 0) {
+                    controlHtml = `<div class="input-group" style="display: flex; gap: 5px;">
+                    <input type="number" step="any" id="input_var_${index}" value="${currentValue}" style="width: 80px; padding: 4px; background: var(--bg-color); border: 1px solid var(--overlay-color); color: var(--text-color); border-radius: 4px;">
+                    <button onclick="sendVarValue(${index})" style="padding: 4px 10px; background: var(--blue); color: var(--bg-color); border: none; border-radius: 4px; width: auto; cursor: pointer;">Set</button>
+                    </div>`;
+                } else {
+                    const modeLabel = varMode === 1 ? "Uptime (ms)" : "Random";
+                    controlHtml = `<span style="font-size: 12px; color: var(--text-color);">Live (${modeLabel}): <strong id="var_val_${index}" style="color:var(--peach)">${currentValue.toFixed(2)}</strong></span>`;
+                }
+
+                varHtml += `<div style="margin: 6px 0; padding: 8px; background: var(--bg-color); border-radius: 6px; border: 1px solid var(--overlay-color); display: flex; align-items: center; justify-content: space-between;">
+                <span>${ent.name} <span style="font-size: 11px; opacity: 0.7;">(Mode ${varMode})</span></span>
+                ${controlHtml}
+                </div>`;
+            }
+        });
+
+        if (!hasVar) {
+            varHtml += '<div style="font-size: 12px; color: #a6adc8; font-style: italic; margin-top:5px;">No virtual variables configured.</div>';
+        }
+        varContainer.innerHTML = varHtml;
+    }
+
     syncRegistryState();
 }
 
@@ -490,6 +560,43 @@ function emergencyStop() {
     bufferWarning.innerText = "⚠️ System locked!";
 }
 
+function sendVarValue(index) {
+    const valInput = document.getElementById(`input_var_${index}`);
+    if (!valInput) return;
+
+    const newVal = parseFloat(valInput.value);
+    if (isNaN(newVal)) return;
+
+    if (!hardwareRegistry[index].params) hardwareRegistry[index].params = [];
+    hardwareRegistry[index].params[0] = newVal;
+
+    const payload = {
+        action: "update_entity",
+        index: index,
+        params: hardwareRegistry[index].params
+    };
+
+    if (window.ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(payload));
+    }
+}
+
+function changeVarMode(index, newMode) {
+    if (!hardwareRegistry[index].pins) hardwareRegistry[index].pins = [0];
+    hardwareRegistry[index].pins[0] = parseInt(newMode);
+
+    const payload = {
+        action: "update_entity",
+        index: index,
+        pins: hardwareRegistry[index].pins
+    };
+
+    if (window.ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(payload));
+    }
+
+    buildDynamicUI();
+}
 
 // ============================================================================
 // 4. 3D VISUALIZER (THREE.JS)
@@ -638,7 +745,7 @@ async function processAndStreamGCode() {
         ws.send(commandBatch[i]);
 
         let waitTime = 0;
-        while (waitingForAck && waitTime < 2000) {
+        while (waitingForAck && waitTime < 5000) {
             if (!isStreaming) break;
             await new Promise(r => setTimeout(r, 5));
             waitTime += 5;
@@ -743,6 +850,14 @@ const DEVICE_INSTRUCTIONS = {
     <b>DEVICE_PIPELINE (Logic Interlock & Automation Pipeline)</b><br>
     • <b>IF-ELSE Mode - Pins:</b> [0]: Source Index, [1]: Target Index | <b>Params:</b> [0]: Min Threshold, [1]: Max Threshold, [2]: Val True, [3]: Val False<br>
     • <b>FMA Mode - Pins:</b> [0,1,2]: Source Indices (or -1 for constant), [3]: Target Index | <b>Params:</b> [0,1,2]: Constant A, B, C
+    `,
+    [DEVICE_VAR]: `
+    <b>DEVICE_VAR (Virtual Variable / Data Source)</b><br>
+    • <b>Pins:</b> [0]: Mode<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<b>0:</b> Normal / Input Variable (Default)<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<b>1:</b> System Uptime (ms)<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<b>2:</b> Random Number Generator<br>
+    • <b>Params:</b> [0]: Current Value | [1]: Min (for Random) | [2]: Max (for Random)
     `
 };
 
@@ -769,6 +884,11 @@ function renderVisualConfigCards() {
         const instructionHTML = DEVICE_INSTRUCTIONS[ent.type] || "<i>No instructions available for this device type.</i>";
 
         card.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid var(--overlay-color); padding-bottom: 6px;">
+        <span style="font-weight: bold; color: var(--peach); font-size: 13px;">📌 Entity #${index}</span>
+        <span style="font-size: 11px; color: #a6adc8; font-family: monospace;">Type ID: ${ent.type}</span>
+        </div>
+
         <div style="display: grid; grid-template-columns: 2fr 2fr 100px; gap: 10px; align-items: center; margin-bottom: 12px;">
         <div>
         <label style="font-size: 11px; color: #a6adc8; display: block; margin-bottom: 3px;">Device Name</label>
@@ -781,6 +901,7 @@ function renderVisualConfigCards() {
         <option value="${DEVICE_PWM_SENSOR}" ${ent.type === DEVICE_PWM_SENSOR ? 'selected' : ''}>Sensor / PWM</option>
         <option value="${DEVICE_GPIO}" ${ent.type === DEVICE_GPIO ? 'selected' : ''}>GPIO (Universal)</option>
         <option value="${DEVICE_PIPELINE}" ${ent.type === DEVICE_PIPELINE ? 'selected' : ''}>Pipeline Logic</option>
+        <option value="${DEVICE_VAR}" ${ent.type === DEVICE_VAR ? 'selected' : ''}>Virtual Variable</option>
         </select>
         </div>
         <div style="text-align: right; padding-top: 15px;">

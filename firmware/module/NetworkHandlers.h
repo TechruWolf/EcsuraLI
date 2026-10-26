@@ -93,9 +93,9 @@ void handleSaveConfig(AsyncWebSocketClient *client, const char* jsonPayload) {
         return;
     }
 
-    portENTER_CRITICAL(&hardwareMux);
+    SYS_ENTER_CRITICAL();
     hardwareEntities = newEntities;
-    portEXIT_CRITICAL(&hardwareMux);
+    SYS_EXIT_CRITICAL();
 
     for (const auto& ent : hardwareEntities) {
         if (isAxisDevice(ent.type)) {
@@ -138,7 +138,7 @@ void handleSaveConfig(AsyncWebSocketClient *client, const char* jsonPayload) {
 
 void handleGetConfig(AsyncWebSocketClient *client) {
     String responseJson = "CFG_RESP,[";
-    portENTER_CRITICAL(&hardwareMux);
+    SYS_ENTER_CRITICAL();
     for (size_t i = 0; i < hardwareEntities.size(); i++) {
         responseJson += "{\"name\":\"" + hardwareEntities[i].name + "\",";
         responseJson += "\"type\":" + String(hardwareEntities[i].type) + ",";
@@ -155,7 +155,7 @@ void handleGetConfig(AsyncWebSocketClient *client) {
         responseJson += "]}";
         if (i + 1 < hardwareEntities.size()) responseJson += ",";
     }
-    portEXIT_CRITICAL(&hardwareMux);
+    SYS_EXIT_CRITICAL();
     responseJson += "]";
     client->text(responseJson);
 }
@@ -164,16 +164,16 @@ void handleSetPWM(AsyncWebSocketClient *client, char* payload) {
     char deviceName[20];
     float targetT = 0;
     if (sscanf(payload, "%19[^,],%f", deviceName, &targetT) == 2) {
-        portENTER_CRITICAL(&hardwareMux);
+        SYS_ENTER_CRITICAL();
         for (auto& ent : hardwareEntities) {
             if (ent.name == deviceName && ent.type == DEVICE_PWM_SENSOR && !ent.params.empty()) {
                 ent.params[0] = targetT;
-                portEXIT_CRITICAL(&hardwareMux);
+                SYS_EXIT_CRITICAL();
                 client->text("ACK");
                 return;
             }
         }
-        portEXIT_CRITICAL(&hardwareMux);
+        SYS_EXIT_CRITICAL();
     }
     client->text("ERR_DEV");
 }
@@ -191,7 +191,7 @@ void handleHome(AsyncWebSocketClient *client, char* payload) {
     std::vector<HomingTargetInfo> homingList;
     bool isAll = (strcmp(targetAxis, "ALL") == 0);
 
-    portENTER_CRITICAL(&hardwareMux);
+    SYS_ENTER_CRITICAL();
 
     size_t pipelineAxisIdx = 0;
     for (size_t i = 0; i < hardwareEntities.size(); i++) {
@@ -214,7 +214,7 @@ void handleHome(AsyncWebSocketClient *client, char* payload) {
         if (isAxisDevice(ent.type)) totalAxesCount++;
     }
 
-    portEXIT_CRITICAL(&hardwareMux);
+    SYS_EXIT_CRITICAL();
 
     if (homingList.empty()) {
         client->text("ERR_HOME");
@@ -253,7 +253,7 @@ void handleGpio(AsyncWebSocketClient *client, char* payload) {
     int val = -1;
     int scanned = sscanf(payload, "%19[^,],%d", deviceName, &val);
 
-    portENTER_CRITICAL(&hardwareMux);
+    SYS_ENTER_CRITICAL();
     bool found = false;
     int8_t pin = -1;
     float modeParam = 0;
@@ -275,7 +275,7 @@ void handleGpio(AsyncWebSocketClient *client, char* payload) {
             break;
         }
     }
-    portEXIT_CRITICAL(&hardwareMux);
+    SYS_EXIT_CRITICAL();
 
     if (!found || pin == -1) {
         client->text("ERR_GPIO");
@@ -293,7 +293,7 @@ void handleEmergencyStop(AsyncWebSocketClient *client) {
     motionPipeline.clear();
     portEXIT_CRITICAL(&ecsMux);
 
-    portENTER_CRITICAL(&hardwareMux);
+    SYS_ENTER_CRITICAL();
     for (auto& ent : hardwareEntities) {
         if (ent.type == DEVICE_PWM_SENSOR && !ent.params.empty()) {
             ent.params[0] = 0.0f;
@@ -303,7 +303,7 @@ void handleEmergencyStop(AsyncWebSocketClient *client) {
             digitalWrite(ent.pins[2], HIGH);
         }
     }
-    portEXIT_CRITICAL(&hardwareMux);
+    SYS_EXIT_CRITICAL();
     client->text("EMG_ACK");
 }
 
@@ -330,7 +330,7 @@ void handleMotionPush(AsyncWebSocketClient *client, char* buffer) {
         stepsList.push_back((int32_t)atol(token));
     }
 
-    if (t > 0 && !stepsList.empty()) {
+    if (t >= 0.0f) {
         portENTER_CRITICAL(&ecsMux);
         bool success = motionPipeline.push(t, stepsList);
         size_t current_count = motionPipeline.count();

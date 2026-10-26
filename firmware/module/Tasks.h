@@ -8,13 +8,13 @@ volatile uint32_t freeHeapBytes = 0;
 volatile uint32_t totalHeapBytes = 0;
 
 void SensorAndPWMTask(void *pvParameters) {
-    portENTER_CRITICAL(&hardwareMux);
+    SYS_ENTER_CRITICAL();
     for (auto& ent : hardwareEntities) {
         if (ent.type == DEVICE_PWM_SENSOR && !ent.pins.empty() && ent.pins[0] != -1) {
             ledcAttach(ent.pins[0], 5000, 8);
         }
     }
-    portEXIT_CRITICAL(&hardwareMux);
+    SYS_EXIT_CRITICAL();
 
     TickType_t xLastWakeTime = xTaskGetTickCount();
     const TickType_t xFrequency = pdMS_TO_TICKS(200);
@@ -33,13 +33,13 @@ void SensorAndPWMTask(void *pvParameters) {
             if (ent.type == DEVICE_PWM_SENSOR && ent.pins.size() >= 2 && ent.pins[1] != -1 && ent.params.size() >= 5) {
                 float current = readAnalogPin(ent.pins[1], ent.params);
 
-                portENTER_CRITICAL(&hardwareMux);
+                SYS_ENTER_CRITICAL();
                 ent.params[1] = current;
-                portEXIT_CRITICAL(&hardwareMux);
+                SYS_EXIT_CRITICAL();
             }
         }
 
-        portENTER_CRITICAL(&hardwareMux);
+        SYS_ENTER_CRITICAL();
         for (auto& ent : hardwareEntities) {
             if (ent.type == DEVICE_PWM_SENSOR && !ent.pins.empty() && ent.pins[0] != -1 && ent.params.size() >= 5) {
                 uint8_t pin = ent.pins[0];
@@ -66,17 +66,77 @@ void SensorAndPWMTask(void *pvParameters) {
                 }
             }
         }
-        portEXIT_CRITICAL(&hardwareMux);
+        SYS_EXIT_CRITICAL();
 
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
 
-        portENTER_CRITICAL(&hardwareMux);
+        SYS_ENTER_CRITICAL();
         for (auto& ent : hardwareEntities) {
             if (ent.type == DEVICE_PWM_SENSOR && !ent.pins.empty() && ent.pins[0] != -1) {
                 ledcWrite(ent.pins[0], 0);
             }
         }
-        portEXIT_CRITICAL(&hardwareMux);
+        SYS_EXIT_CRITICAL();
+    }
+}
+
+void telemetryTask(void *pvParameters) {
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    const TickType_t xFrequency = pdMS_TO_TICKS(100);
+    char statusMsg[1024];
+
+    for (;;) {
+        uint32_t loopTime, freeH, totalH;
+
+        struct EntitySnap {
+            decltype(hardwareEntities[0].type) type;
+            float p0;
+            float p1;
+            int rState1;
+        };
+        std::vector<EntitySnap> snapList;
+
+        SYS_ENTER_CRITICAL();
+        loopTime = systemLoopTimeUs;
+        freeH = freeHeapBytes;
+        totalH = totalHeapBytes;
+
+        snapList.reserve(hardwareEntities.size());
+        for (const auto& ent : hardwareEntities) {
+            EntitySnap s;
+            s.type = ent.type;
+            s.p0 = ent.params.empty() ? 0.0f : ent.params[0];
+            s.p1 = ent.params.size() >= 2 ? ent.params[1] : 0.0f;
+            s.rState1 = ent.runtimeState1;
+            snapList.push_back(s);
+        }
+        SYS_EXIT_CRITICAL();
+
+        int offset = snprintf(statusMsg, sizeof(statusMsg), "STATUS,%u,%u,%u", loopTime, freeH, totalH);
+
+        for (const auto& s : snapList) {
+            if (s.type == DEVICE_PWM_SENSOR) {
+                offset += snprintf(statusMsg + offset, sizeof(statusMsg) - offset, ",%.1f", s.p1);
+            }
+        }
+
+        for (const auto& s : snapList) {
+            if (isAxisDevice(s.type)) {
+                float stepsPerUnit = (s.p0 > 0) ? s.p0 : 80.0f;
+                float currentPos = (float)s.rState1 / stepsPerUnit;
+                offset += snprintf(statusMsg + offset, sizeof(statusMsg) - offset, ",%.2f", currentPos);
+            }
+        }
+
+        for (const auto& s : snapList) {
+            if (s.type == DEVICE_VAR) {
+                offset += snprintf(statusMsg + offset, sizeof(statusMsg) - offset, ",%.2f", s.p0);
+            }
+        }
+
+        ws.textAll(statusMsg);
+
+        vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }
 }
 
@@ -85,9 +145,74 @@ void PipelineTask(void *pvParameters) {
     const TickType_t xFrequency = pdMS_TO_TICKS(200);
 
     for (;;) {
-        portENTER_CRITICAL(&hardwareMux);
+        SYS_ENTER_CRITICAL();
+        for (auto& varEnt : hardwareEntities) {
+            if (varEnt.type != DEVICE_VAR) continue;
+            int varMode = varEnt.pins.empty() ? 0 : varEnt.pins[0];
 
-        for (auto& pipelineEnt : hardwareEntities) {
+            switch (varMode) {
+                case 1:
+                    if (varEnt.params.empty()) varEnt.params.push_back(0.0f);
+                    varEnt.params[0] = (float)millis();
+                break;
+                case 2: {
+                    if (varEnt.params.empty()) varEnt.params.push_back(0.0f);
+                    float minVal = (varEnt.params.size() >= 2) ? varEnt.params[1] : 0.0f;
+                    float maxVal = (varEnt.params.size() >= 3) ? varEnt.params[2] : 100.0f;
+                    varEnt.params[0] = minVal + static_cast<float>(rand()) / (static_cast<float>(RAND_MAX / (maxVal - minVal)));
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+        SYS_EXIT_CRITICAL();
+
+        struct EntityCopy {
+            decltype(hardwareEntities[0].type) type;
+            std::vector<float> params;
+            std::vector<int> pins;
+            int runtimeState1;
+        };
+        std::vector<EntityCopy> entitiesSnap;
+
+        SYS_ENTER_CRITICAL();
+        entitiesSnap.reserve(hardwareEntities.size());
+        for (const auto& ent : hardwareEntities) {
+            EntityCopy ec;
+            ec.type = ent.type;
+            ec.params = ent.params;
+            ec.runtimeState1 = ent.runtimeState1;
+
+            ec.pins.clear();
+            for (auto p : ent.pins) {
+                ec.pins.push_back(static_cast<int>(p));
+            }
+
+            entitiesSnap.push_back(ec);
+        }
+        SYS_EXIT_CRITICAL();
+
+        auto getSnapValue = [](const EntityCopy& ent) -> float {
+            if (ent.type == DEVICE_PWM_SENSOR) {
+                return (ent.params.size() >= 2) ? ent.params[1] : (ent.params.empty() ? 0.0f : ent.params[0]);
+            } else if (ent.type == DEVICE_GPIO) {
+                return (float)ent.runtimeState1;
+            } else if (ent.type == DEVICE_VAR) {
+                return ent.params.empty() ? 0.0f : ent.params[0];
+            } else {
+                return 0.0f;
+            }
+        };
+
+        struct PipelineUpdate {
+            int targetIdx;
+            float finalVal;
+        };
+        std::vector<PipelineUpdate> pendingUpdates;
+
+        for (size_t pIdx = 0; pIdx < entitiesSnap.size(); ++pIdx) {
+            const auto& pipelineEnt = entitiesSnap[pIdx];
             if (pipelineEnt.type != DEVICE_PIPELINE) continue;
             if (pipelineEnt.pins.size() < 2) continue;
 
@@ -96,48 +221,23 @@ void PipelineTask(void *pvParameters) {
 
             if (pipelineEnt.pins.size() >= 4) {
                 int idxA = pipelineEnt.pins[0];
-                float valA = 0.0f;
-                if (idxA >= 0 && idxA < hardwareEntities.size()) {
-                    auto& srcA = hardwareEntities[idxA];
-                    valA = (srcA.type == DEVICE_PWM_SENSOR) ? ((srcA.params.size() >= 2) ? srcA.params[1] : (srcA.params.empty() ? 0.0f : srcA.params[0]))
-                    : (srcA.type == DEVICE_GPIO) ? (float)srcA.runtimeState1 : srcA.runtimeState2;
-                } else {
-                    valA = (pipelineEnt.params.size() > 0) ? pipelineEnt.params[0] : 0.0f;
-                }
+                float valA = (idxA >= 0 && (size_t)idxA < entitiesSnap.size()) ? getSnapValue(entitiesSnap[idxA]) : ((pipelineEnt.params.size() > 0) ? pipelineEnt.params[0] : 0.0f);
 
                 int idxB = pipelineEnt.pins[1];
-                float valB = 0.0f;
-                if (idxB >= 0 && idxB < hardwareEntities.size()) {
-                    auto& srcB = hardwareEntities[idxB];
-                    valB = (srcB.type == DEVICE_PWM_SENSOR) ? ((srcB.params.size() >= 2) ? srcB.params[1] : (srcB.params.empty() ? 0.0f : srcB.params[0]))
-                    : (srcB.type == DEVICE_GPIO) ? (float)srcB.runtimeState1 : srcB.runtimeState2;
-                } else {
-                    valB = (pipelineEnt.params.size() > 1) ? pipelineEnt.params[1] : 1.0f;
-                }
+                float valB = (idxB >= 0 && (size_t)idxB < entitiesSnap.size()) ? getSnapValue(entitiesSnap[idxB]) : ((pipelineEnt.params.size() > 1) ? pipelineEnt.params[1] : 1.0f);
 
                 int idxC = pipelineEnt.pins[2];
-                float valC = 0.0f;
-                if (idxC >= 0 && idxC < hardwareEntities.size()) {
-                    auto& srcC = hardwareEntities[idxC];
-                    valC = (srcC.type == DEVICE_PWM_SENSOR) ? ((srcC.params.size() >= 2) ? srcC.params[1] : (srcC.params.empty() ? 0.0f : srcC.params[0]))
-                    : (srcC.type == DEVICE_GPIO) ? (float)srcC.runtimeState1 : srcC.runtimeState2;
-                } else {
-                    valC = (pipelineEnt.params.size() > 2) ? pipelineEnt.params[2] : 0.0f;
-                }
+                float valC = (idxC >= 0 && (size_t)idxC < entitiesSnap.size()) ? getSnapValue(entitiesSnap[idxC]) : ((pipelineEnt.params.size() > 2) ? pipelineEnt.params[2] : 0.0f);
 
                 finalValToTarget = (valA * valB) + valC;
                 targetIdx = pipelineEnt.pins[3];
-
-            }
-            else {
+            } else {
                 int sourceIdx = pipelineEnt.pins[0];
                 targetIdx = pipelineEnt.pins[1];
 
-                if (sourceIdx < 0 || sourceIdx >= hardwareEntities.size()) continue;
+                if (sourceIdx < 0 || (size_t)sourceIdx >= entitiesSnap.size()) continue;
 
-                auto& src = hardwareEntities[sourceIdx];
-                float sourceVal = (src.type == DEVICE_PWM_SENSOR) ? ((src.params.size() >= 2) ? src.params[1] : (src.params.empty() ? 0.0f : src.params[0]))
-                : (src.type == DEVICE_GPIO) ? (float)src.runtimeState1 : src.runtimeState2;
+                float sourceVal = getSnapValue(entitiesSnap[sourceIdx]);
 
                 float minTrigger = (pipelineEnt.params.size() >= 1) ? pipelineEnt.params[0] : -999999.0f;
                 float maxTrigger = (pipelineEnt.params.size() >= 2) ? pipelineEnt.params[1] : 999999.0f;
@@ -155,67 +255,46 @@ void PipelineTask(void *pvParameters) {
                     if (pipelineEnt.params.size() >= 4) {
                         finalValToTarget = pipelineEnt.params[3];
                     } else {
-                        continue;
+                        finalValToTarget = sourceVal;
                     }
                 }
             }
 
-            if (targetIdx < 0 || targetIdx >= hardwareEntities.size()) continue;
+            if (targetIdx >= 0 && (size_t)targetIdx < entitiesSnap.size()) {
+                pendingUpdates.push_back({targetIdx, finalValToTarget});
+            }
+        }
 
-            auto& tgt = hardwareEntities[targetIdx];
+        SYS_ENTER_CRITICAL();
+        for (const auto& update : pendingUpdates) {
+            if (update.targetIdx < 0 || (size_t)update.targetIdx >= hardwareEntities.size()) continue;
+            auto& tgt = hardwareEntities[update.targetIdx];
             if (tgt.type == DEVICE_PWM_SENSOR && !tgt.params.empty()) {
-                tgt.params[0] = finalValToTarget;
-            } else if (tgt.type == DEVICE_GPIO && !tgt.pins.empty()) {
-                int pin = tgt.pins[0];
-                int valInt = (int)finalValToTarget;
-                if (valInt > 1) {
-                    ledcWrite(pin, constrain(valInt, 0, 255));
-                } else {
-                    digitalWrite(pin, valInt ? HIGH : LOW);
+                tgt.params[0] = update.finalVal;
+            } else if (tgt.type == DEVICE_GPIO) {
+                tgt.runtimeState1 = (int)update.finalVal;
+            } else if (tgt.type == DEVICE_VAR) {
+                if (tgt.params.empty()) {
+                    tgt.params.push_back(0.0f);
                 }
-                tgt.runtimeState1 = valInt;
+                tgt.params[0] = update.finalVal;
             }
         }
+        SYS_EXIT_CRITICAL();
 
-        portEXIT_CRITICAL(&hardwareMux);
-        vTaskDelayUntil(&xLastWakeTime, xFrequency);
-    }
-}
-
-void telemetryTask(void *pvParameters) {
-    TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(100);
-    char statusMsg[256];
-
-    for (;;) {
-        portENTER_CRITICAL(&hardwareMux);
-        uint32_t loopTime = systemLoopTimeUs;
-        uint32_t freeH = freeHeapBytes;
-        uint32_t totalH = totalHeapBytes;
-        portEXIT_CRITICAL(&hardwareMux);
-
-        int offset = snprintf(statusMsg, sizeof(statusMsg), "STATUS,%u,%u,%u", loopTime, freeH, totalH);
-
-        portENTER_CRITICAL(&hardwareMux);
-
-        for (const auto& ent : hardwareEntities) {
-            if (ent.type == DEVICE_PWM_SENSOR) {
-                float currentTemp = (ent.params.size() >= 2) ? ent.params[1] : 0.0f;
-                offset += snprintf(statusMsg + offset, sizeof(statusMsg) - offset, ",%.1f", currentTemp);
+        for (const auto& update : pendingUpdates) {
+            if (update.targetIdx < 0 || (size_t)update.targetIdx >= hardwareEntities.size()) continue;
+            const auto& tgt = hardwareEntities[update.targetIdx];
+            if (tgt.type == DEVICE_GPIO && !tgt.pins.empty()) {
+                int pinNum = tgt.pins[0];
+                int valInt = (int)update.finalVal;
+                if (valInt > 1) {
+                    ledcWrite(pinNum, constrain(valInt, 0, 255));
+                } else {
+                    digitalWrite(pinNum, valInt ? HIGH : LOW);
+                }
             }
         }
-
-        for (const auto& ent : hardwareEntities) {
-            if (isAxisDevice(ent.type)) {
-                float stepsPerUnit = (!ent.params.empty() && ent.params[0] > 0) ? ent.params[0] : 80.0f;
-                float currentPos = (float)ent.runtimeState1 / stepsPerUnit;
-                offset += snprintf(statusMsg + offset, sizeof(statusMsg) - offset, ",%.2f", currentPos);
-            }
-        }
-
-        portEXIT_CRITICAL(&hardwareMux);
-
-        ws.textAll(statusMsg);
 
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }
@@ -240,30 +319,30 @@ void systemMonitorTask(void *pvParameters) {
         uint32_t freeHeap = ESP.getFreeHeap();
         uint32_t totalHeap = ESP.getHeapSize();
 
-        portENTER_CRITICAL(&hardwareMux);
+        SYS_ENTER_CRITICAL();
         size_t count = hardwareEntities.size();
         for(size_t i = 0; i < count; i++) {
             volatile auto& ent = hardwareEntities[i];
             (void)ent.type;
         }
-        portEXIT_CRITICAL(&hardwareMux);
+        SYS_EXIT_CRITICAL();
 
         uint64_t elapsedTime = SYS_GET_TIME_US() - startTime;
 
-        portENTER_CRITICAL(&hardwareMux);
+        SYS_ENTER_CRITICAL();
         systemLoopTimeUs = (uint32_t)elapsedTime;
         freeHeapBytes = freeHeap;
         totalHeapBytes = totalHeap;
-        portEXIT_CRITICAL(&hardwareMux);
+        SYS_EXIT_CRITICAL();
 
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }
 }
 
 inline void initSystemTasks() {
-    xTaskCreatePinnedToCore(SensorAndPWMTask, "PIDTask", 4096, NULL, 1, NULL, 0);
-    xTaskCreatePinnedToCore(telemetryTask, "TelemetryTask", 4096, NULL, 1, NULL, 0);
-    xTaskCreatePinnedToCore(motionControlTask, "MotionTask", 4096, NULL, 2, NULL, 1);
-    xTaskCreatePinnedToCore(PipelineTask, "PipelineTask", 4096, NULL, 1, NULL, 1);
-    xTaskCreatePinnedToCore(systemMonitorTask, "SysMonitorTask", 2048, NULL, 1, NULL, 0);
+    SYS_TASK_CREATE(SensorAndPWMTask, "PIDTask", 4096, NULL, 1, NULL, 0);
+    SYS_TASK_CREATE(telemetryTask, "TelemetryTask", 4096, NULL, 1, NULL, 0);
+    SYS_TASK_CREATE(motionControlTask, "MotionTask", 4096, NULL, 2, NULL, 1);
+    SYS_TASK_CREATE(PipelineTask, "PipelineTask", 4096, NULL, 1, NULL, 0);
+    SYS_TASK_CREATE(systemMonitorTask, "SysMonitorTask", 2048, NULL, 1, NULL, 0);
 }
