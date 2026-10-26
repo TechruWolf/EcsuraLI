@@ -87,6 +87,25 @@ struct MotionBufferECS {
     size_t count() const {
         return (tail >= head) ? (tail - head) : (MOTION_BUFFER_SIZE - head + tail);
     }
+
+    bool peek(size_t index, uint32_t &t, std::vector<int32_t>& outSteps) const {
+        if (index >= count()) return false;
+
+        size_t actual_idx = (head + index) % MOTION_BUFFER_SIZE;
+        t = time_units[actual_idx];
+        outSteps.resize(numAxes);
+        for (size_t i = 0; i < numAxes; i++) {
+            outSteps[i] = steps_matrix[actual_idx][i];
+        }
+        return true;
+    }
+};
+
+struct MotionBlock {
+    uint32_t t;
+    std::vector<int32_t> steps;
+    float entry_speed_factor;
+    float exit_speed_factor;
 };
 
 struct AxisContext {
@@ -95,6 +114,8 @@ struct AxisContext {
     float stepsPerUnit, maxLimit, minStepDelay;
     int32_t homingBackoff;
     int32_t homingPostOffset;
+    bool minInitialState;
+    bool maxInitialState;
 };
 
 Preferences preferences;

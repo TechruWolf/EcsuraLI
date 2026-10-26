@@ -19,6 +19,8 @@
 // - params[2] : minStepDelay (Minimum delay in microseconds per step)
 // - params[3] : homingBackoffSteps (Steps to back off after hitting endstop)
 // - params[4] : homingPostOffset (Offset position after homing completion)
+// - params[5] : minInitialState (Idle state polarity: 1 for HIGH/NO, 0 for LOW/NC)
+// - params[6] : maxInitialState (Idle state polarity: 1 for HIGH/NO, 0 for LOW/NC)
 // ==========================================
 
 // ==========================================
@@ -84,17 +86,17 @@
 
 inline std::vector<HardwareEntity> hardwareEntities = {
     //Name                   Type                          Pins                             Params                                                          Runtime States
-    { "X",          DEVICE_AXIS,    {13, 12,  6, 48, 38},    {80.0f, 350.0f, 25.0f,  0.0f,  0.0f},                                           0,    0.0f,   0.0f },
-    { "Y",          DEVICE_AXIS,    {10,  9, 11, 39, 40},    {80.0f, 170.0f, 25.0f,  0.0f,  0.0f},                                           0,    0.0f,   0.0f },
-    { "Z",          DEVICE_AXIS,    { 5,  7,  8, 41, -1},    {400.0f, 320.0f, 50.0f,  0.0f,  0.0f},                                          0,    0.0f,   0.0f },
-    { "E0",         DEVICE_AXIS,  {16, 17, 18, -1, -1},    {100.0f,   0.0f, 50.0f,  0.0f,  0.0f},                                          0,    0.0f,   0.0f },
+    { "X",          DEVICE_AXIS,    {13, 12,  6, 48, -1},    {80.0f, 350.0f, 25.0f,  6800.0f,  0.0f, 0.0f},                                           0,    0.0f,   0.0f },
+    { "Y",          DEVICE_AXIS,    {10,  9, 11, 39, -1},    {80.0f, 170.0f, 25.0f,  0.0f,  0.0f, 0.0f},                                           0,    0.0f,   0.0f },
+    { "Z",          DEVICE_AXIS,    { 5,  7,  8, 41, -1},    {800.0f, 160.0f, 50.0f,  800.0f,  0.0f, 0.0f},                                          0,    0.0f,   0.0f },
+    { "E0",         DEVICE_AXIS,  {16, 17, 18, -1, -1},    {400.0f,   0.0f, 25.0f,  0.0f,  0.0f},                                          0,    0.0f,   0.0f },
     { "HEATER_0",   DEVICE_PWM_SENSOR,                {21, 1},                 {0.0f,   0.0f, 22.2f, 1.08f, 114.0f,  4700.0f, 100000.0f, 3950.0f, 2.0f, 10, 10},       0,    0.0f,   0.0f },
     { "FAN",        DEVICE_PWM_SENSOR,                {14, 1},                 {0.0f,   0.0f, 22.2f, 1.08f, 114.0f, 0, 0, 0, 1, 10, 10},                                           0,    0.0f,   0.0f },
     { "DOOR_SW",    DEVICE_GPIO,                {2},                     {0.0f,   0.0f,  0.0f,  0.0f,   0.0f},                                           0,    0.0f,   0.0f }
 };
 
-inline const char* WIFI_SSID = "YOUR_SSID";
-inline const char* WIFI_PASS = "I_DONT_KNOW";
+inline const char* WIFI_SSID = "Your_SSID";
+inline const char* WIFI_PASS = "Gugugaga ?";
 
 inline void initHardwareECS() {
     for (auto& ent : hardwareEntities) {

@@ -12,11 +12,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EcsuraLI Web Control - Dynamic Registry</title>
+    <title>EcsuraLI</title>
     <!-- Include Three.js library from CDN -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
-        :root {
+        :root, [data-theme="Catppuccin"] {
             --bg-color: #11111b;
             --surface-color: #181825;
             --overlay-color: #313244;
@@ -25,6 +25,47 @@
             --red: #f38ba8;
             --blue: #89b4fa;
             --peach: #fab387;
+            --accent-glow: rgba(137, 180, 250, 0.25);
+            --header-border: #313244;
+        }
+
+        [data-theme="Nord"] {
+            --bg-color: #242933;
+            --surface-color: #2e3440;
+            --overlay-color: #3b4252;
+            --text-color: #eceff4;
+            --green: #a3be8c;
+            --red: #bf616a;
+            --blue: #88c0d0;
+            --peach: #ebcb8b;
+            --accent-glow: rgba(136, 192, 208, 0.2);
+            --header-border: #434c5e;
+        }
+
+        [data-theme="Github"] {
+            --bg-color: #0d1117;
+            --surface-color: #161b22;
+            --overlay-color: #21262d;
+            --text-color: #f0f6fc;
+            --green: #2ea043;
+            --red: #da3633;
+            --blue: #58a6ff;
+            --peach: #d29922;
+            --accent-glow: rgba(88, 166, 255, 0.2);
+            --header-border: #30363d;
+        }
+
+        [data-theme="Neon"] {
+            --bg-color: #080c10;
+            --surface-color: #0d131a;
+            --overlay-color: #16222e;
+            --text-color: #e0fbfc;
+            --green: #06d6a0;
+            --red: #ef476f;
+            --blue: #118ab2;
+            --peach: #ffd166;
+            --accent-glow: rgba(6, 214, 160, 0.2);
+            --header-border: #1f3147;
         }
 
         body {
@@ -36,19 +77,153 @@
             display: flex;
             flex-direction: column;
             align-items: center;
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+
+        #bootScreen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background-color: var(--bg-color);
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Courier New', Courier, monospace;
+            padding: 20px;
+            box-sizing: border-box;
+            transition: opacity 0.6s ease;
+        }
+
+        .boot-box {
+            width: 100%;
+            max-width: 600px;
+            background: var(--surface-color);
+            border: 1px solid var(--overlay-color);
+            border-radius: 8px;
+            padding: 25px;
+            box-shadow: 0 0 30px var(--accent-glow);
+        }
+
+        .boot-title {
+            color: var(--blue);
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 15px;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            border-bottom: 1px solid var(--overlay-color);
+            padding-bottom: 8px;
+        }
+
+        .boot-log {
+            height: 140px;
+            overflow-y: auto;
+            font-size: 12px;
+            color: #a6adc8;
+            margin-bottom: 20px;
+            background: #0a0a0f;
+            padding: 10px;
+            border-radius: 4px;
+            border: 1px solid var(--overlay-color);
+        }
+
+        .boot-progress-wrap {
+            width: 100%;
+            background: var(--overlay-color);
+            height: 12px;
+            border-radius: 6px;
+            overflow: hidden;
+            margin-bottom: 15px;
+        }
+
+        #bootProgressBar {
+            width: 0%;
+            height: 100%;
+            background: var(--green);
+            transition: width 0.2s ease;
+            box-shadow: 0 0 10px var(--green);
+        }
+
+        .boot-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 13px;
+        }
+
+        #enterAppBtn {
+            background-color: var(--blue);
+            color: var(--bg-color);
+            border: none;
+            padding: 10px 24px;
+            font-weight: bold;
+            border-radius: 6px;
+            cursor: pointer;
+            display: none;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            box-shadow: 0 0 15px var(--accent-glow);
+            transition: 0.2s;
+        }
+
+        #enterAppBtn:hover {
+            opacity: 0.85;
+            transform: scale(1.02);
+        }
+
+        .top-utility-bar {
+            width: 100%;
+            max-width: 1400px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .theme-switcher {
+            display: flex;
+            gap: 6px;
+            background: var(--surface-color);
+            padding: 6px 10px;
+            border-radius: 8px;
+            border: 1px solid var(--overlay-color);
+        }
+
+        .theme-btn {
+            background: var(--overlay-color);
+            border: none;
+            color: var(--text-color);
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: 0.2s;
+            width: auto;
+            margin: 0;
+        }
+
+        .theme-btn.active-theme {
+            background: var(--blue);
+            color: var(--bg-color);
+            font-weight: bold;
         }
 
         h1 {
-            margin-bottom: 5px;
+            margin: 0;
             color: var(--blue);
+            font-size: 24px;
         }
 
         #status {
             font-weight: bold;
-            margin-bottom: 15px;
+            font-size: 13px;
+            color: var(--peach);
         }
 
-        /* === SYSTEM DASHBOARD PANEL === */
         #systemDashboardContainer {
             width: 100%;
             max-width: 1400px;
@@ -61,7 +236,6 @@
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
         }
 
-        /* === TAB NAVIGATION BAR === */
         .tab-container {
             display: flex;
             gap: 10px;
@@ -88,7 +262,7 @@
         }
 
         .tab-btn:hover {
-            background-color: #45475a;
+            opacity: 0.8;
         }
 
         .tab-btn.active {
@@ -128,7 +302,6 @@
             color: var(--blue);
         }
 
-        /* 3D Visualizer */
         #canvas-container {
             width: 100%;
             height: 350px;
@@ -138,7 +311,6 @@
             position: relative;
         }
 
-        /* Controls & Buttons */
         .control-group {
             margin-bottom: 15px;
         }
@@ -186,7 +358,6 @@
             color: var(--bg-color);
         }
 
-        /* Progress Bar */
         .progress-bar-container {
             width: 100%;
             background-color: var(--overlay-color);
@@ -224,7 +395,6 @@
             font-family: monospace;
         }
 
-        /* Settings Tab UI */
         .config-card {
             width: 100%;
             max-width: 900px;
@@ -234,12 +404,11 @@
             border: 1px solid var(--overlay-color);
         }
 
-        /* Dynamic Configuration Textarea */
         #dynamicConfigJson {
             width: 100%;
             height: 350px;
-            background-color: #11111b;
-            color: #a6e3a1;
+            background-color: var(--bg-color);
+            color: var(--green);
             border: 1px solid var(--overlay-color);
             border-radius: 8px;
             padding: 12px;
@@ -253,15 +422,52 @@
 </head>
 <body>
 
-    <h1>EcsuraLI Control</h1>
-    <div id="status">Connecting to WebSocket...</div>
+    <div id="bootScreen">
+        <div class="boot-box">
+            <div class="boot-title">⚙️ EcsuraLI // SYSTEM BOOT</div>
+            <div id="bootLog" class="boot-log">
+                [0.00s] Initializing kernel environment...<br>
+            </div>
+            <div class="boot-progress-wrap">
+                <div id="bootProgressBar"></div>
+            </div>
+            <div class="boot-footer">
+                <span id="bootStatusText" style="font-size: 12px; color: var(--blue);">Connecting to hardware endpoint...</span>
+                <button id="enterAppBtn" onclick="dismissBootScreen()">Access Control</button>
+            </div>
+        </div>
+    </div>
 
-    <!-- === SYSTEM DASHBOARD (CPU & RAM) === -->
+    <div class="top-utility-bar">
+        <div>
+            <h1>EcsuraLI</h1>
+            <div id="status">Connecting to WebSocket...</div>
+        </div>
+        <div class="theme-switcher">
+            <button class="theme-btn active-theme" onclick="setTheme('Catppuccin', this)">Catppuccin</button>
+            <button class="theme-btn" onclick="setTheme('Nord', this)">Nord Frost</button>
+            <button class="theme-btn" onclick="setTheme('Github', this)">GitHub Dark</button>
+            <button class="theme-btn" onclick="setTheme('Neon', this)">Cyber Neon</button>
+        </div>
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 12px; background: var(--surface-color); padding: 6px 12px; border-radius: 8px; border: 1px solid var(--overlay-color); font-family: 'Courier New', Courier, monospace;">
+        <div style="font-size: 11px; color: var(--blue); display: flex; flex-direction: column; align-items: flex-end;">
+            <span>SYS_TIME</span>
+            <span id="sysClock" style="font-size: 14px; font-weight: bold; color: var(--text-color);">00:00:00</span>
+        </div>
+        <div style="width: 1px; height: 24px; background: var(--overlay-color);"></div>
+        <div style="font-size: 11px; color: var(--peach); display: flex; flex-direction: column; align-items: flex-end;">
+            <span>SESSION</span>
+            <span id="sessionTimer" style="font-size: 14px; font-weight: bold; color: var(--green);">00:00:00</span>
+        </div>
+    </div>
+
     <div id="systemDashboardContainer">
-        <div style="font-weight: bold; color: #89b4fa; margin-bottom: 8px; font-size: 13px;">🖥️ MCU System Dashboard</div>
+        <div style="font-weight: bold; color: var(--blue); margin-bottom: 8px; font-size: 13px;">🖥️ MCU System Dashboard</div>
         <div style="display: flex; gap: 20px; flex-wrap: wrap;">
             <div style="flex: 1; min-width: 250px;">
-                <div style="display: flex; justify-content: space-between; font-size: 11px; color: #cdd6f4; margin-bottom: 3px;">
+                <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--text-color); margin-bottom: 3px;">
                     <span>⚡ System Load (Loop Time):</span>
                     <strong id="cpuLoadText">0.00 ms (0.0%)</strong>
                 </div>
@@ -270,7 +476,7 @@
                 </div>
             </div>
             <div style="flex: 1; min-width: 250px;">
-                <div style="display: flex; justify-content: space-between; font-size: 11px; color: #cdd6f4; margin-bottom: 3px;">
+                <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--text-color); margin-bottom: 3px;">
                     <span>💾 Free RAM:</span>
                     <strong id="ramText">0.0 KB / 0.0 KB (0.0%)</strong>
                 </div>
@@ -281,26 +487,20 @@
         </div>
     </div>
 
-    <!-- === TAB NAVIGATION === -->
     <div class="tab-container">
         <button class="tab-btn active" onclick="switchTab('controlTab', this)">🎮 Control</button>
         <button class="tab-btn" onclick="switchTab('settingsTab', this)">⚙️ Hardware Config</button>
     </div>
 
-    <!-- === TAB 1: CONTROL & PRINT === -->
     <div id="controlTab" class="tab-content active">
-        <!-- PANEL 1: 3D SIMULATOR & DYNAMIC STATUS -->
         <div class="panel">
             <h3>3D Space Visualizer</h3>
             <div id="canvas-container"></div>
-
-            <!-- Dynamic Coordinates Display (Auto-populated by app.js) -->
             <div class="coords-display" id="dynamicCoordsContainer" style="display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-around;">
                 <span style="color: #a6adc8; font-style: italic;">Loading axes coordinates...</span>
             </div>
         </div>
 
-        <!-- PANEL 2: THERMAL / PWM DEVICES & DYNAMIC JOG CONTROL -->
         <div class="panel">
             <div id="dynamicPWMContainer" style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 15px;">
                 <span style="color: #a6adc8; font-style: italic;">Loading PWM/PID devices...</span>
@@ -312,27 +512,23 @@
                 <label>Step increment (mm):</label>
                 <input type="number" id="jogStep" value="10" step="1">
             </div>
-
             <div id="dynamicJogContainer">
                 <p style="color: #a6adc8; font-style: italic;">Loading axis list from hardware...</p>
             </div>
         </div>
 
-        <!-- PANEL: GPIO OUTPUT DEVICES -->
         <div class="panel">
             <div id="dynamicGPIOContainer" style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 15px;">
                 <span style="color: #a6adc8; font-style: italic;">Loading GPIO devices...</span>
             </div>
         </div>
 
-        <!-- PANEL: PIPELINE AUTOMATION MONITOR -->
         <div class="panel">
             <div id="dynamicPipelineContainer" style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 15px;">
                 <span style="color: #a6adc8; font-style: italic;">Loading pipeline rules...</span>
             </div>
         </div>
 
-        <!-- PANEL 3: G-CODE STREAM & EMERGENCY -->
         <div class="panel">
             <h3>G-Code File Stream</h3>
             <div class="control-group">
@@ -352,29 +548,34 @@
             <h3 style="margin-top: 30px;">Emergency System</h3>
             <button id="emgBtn" onclick="emergencyStop()" class="btn-danger">🛑 EMERGENCY STOP</button>
         </div>
+
+        <div style="background: var(--surface-color); padding: 12px; border-radius: 8px; margin-top: 15px; border: 1px solid var(--overlay-color); width: 100%; max-width: 1400px; box-sizing: border-box;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <span style="font-weight: bold; color: var(--blue);">📦 Motion Pipeline Buffer </span>
+                <span id="bufCountText" style="font-size: 13px; color: var(--green); font-family: monospace;">0 / 0</span>
+            </div>
+            <div style="background: var(--bg-color); border-radius: 4px; height: 12px; overflow: hidden; width: 100%;">
+                <div id="bufProgressBar" style="background: var(--green); width: 0%; height: 100%; transition: width 0.1s ease, background-color 0.2s;"></div>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 11px; color: #a6adc8; margin-top: 5px; font-family: monospace;">
+                <span>Head: <strong id="bufHeadVal" style="color: var(--red);">0</strong></span>
+                <span>Tail: <strong id="bufTailVal" style="color: var(--blue);">0</strong></span>
+            </div>
+        </div>
     </div>
 
-    <!-- TAB HARDWARE CONFIG -->
     <div id="settingsTab" class="tab-content config-card">
-        <h2>🧩 Universal Hardware ECS Configurator (Runtime RAM)</h2>
-        <p style="color: #a6e3a1; font-size: 14px;">Add, remove, or customize motor axes, PWM/PID thermal devices, or GPIOs on the fly without reflashing the Flash memory!</p>
-
+        <h2>Hardware Configurator (Runtime RAM)</h2>
         <div style="margin: 15px 0;">
-            <button onclick="addNewHardwareEntity()" style="padding: 8px 16px; background: #a6e3a1; color: #11111b; border: none; border-radius: 6px; font-weight: bold; cursor: pointer;">➕ Add New Device / Axis</button>
-            <button onclick="saveDynamicRegistryVisual()" style="padding: 8px 16px; background: #89b4fa; color: #11111b; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; margin-left: 10px;">💾 Save Configuration (Runtime RAM) </button>
+            <button onclick="addNewHardwareEntity()" style="padding: 8px 16px; background: var(--green); color: var(--bg-color); border: none; border-radius: 6px; font-weight: bold; cursor: pointer; width: auto;">➕ Add New Device / Axis</button>
+            <button onclick="saveDynamicRegistryVisual()" style="padding: 8px 16px; background: var(--blue); color: var(--bg-color); border: none; border-radius: 6px; font-weight: bold; cursor: pointer; margin-left: 10px; width: auto;">💾 Save Configuration (Runtime RAM)</button>
             <span id="configStatusMsg" style="margin-left: 15px; font-weight: bold;"></span>
         </div>
 
-        <!-- CONTAINER FOR HARDWARE CARDS  -->
-        <div id="visualConfigContainer" style="display: flex; flex-direction: column; gap: 12px; margin-top: 15px;">
-            <!-- Hardware configuration cards will be rendered dynamically here  -->
-        </div>
-
-        <!-- Hidden JSON Textarea for background data sync  -->
+        <div id="visualConfigContainer" style="display: flex; flex-direction: column; gap: 12px; margin-top: 15px;"></div>
         <textarea id="dynamicConfigJson" style="display:none;"></textarea>
     </div>
 
-    <!-- Link app.js script -->
     <script src="app.js"></script>
 </body>
 </html>

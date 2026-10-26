@@ -3,62 +3,131 @@
 
 #pragma once
 
+inline float getSCurveFactor(int32_t index, int32_t total_steps) {
+    if (total_steps <= 0) return 0.0f;
+
+    static float lut[LUT_SIZE];
+    static bool initialized = false;
+    if (!initialized) {
+        for (int i = 0; i < LUT_SIZE; ++i) {
+            float angle = ((float)i / (float)(LUT_SIZE - 1)) * (M_PI_2);
+            lut[i] = sinf(angle);
+        }
+        initialized = true;
+    }
+
+    float exact_idx = ((float)index / (float)total_steps) * (float)(LUT_SIZE - 1);
+    int idx1 = (int)exact_idx;
+
+    if (idx1 >= LUT_SIZE - 1) return lut[LUT_SIZE - 1];
+    if (idx1 < 0) return lut[0];
+
+    int idx2 = idx1 + 1;
+    float frac = exact_idx - (float)idx1;
+
+    return lut[idx1] * (1.0f - frac) + lut[idx2] * frac;
+}
+
 void executeMotion() {
     std::vector<int> axisIndices;
     portENTER_CRITICAL(&hardwareMux);
-    for (size_t i = 0; i < hardwareEntities.size(); i++) {
-        if (!hardwareEntities[i].pins.empty() && hardwareEntities[i].pins[0] != -1) {
+    size_t totalEntities = hardwareEntities.size();
+    for (size_t i = 0; i < totalEntities; i++) {
+        const auto& ent = hardwareEntities[i];
+        if (ent.type == DEVICE_AXIS && !ent.pins.empty() && ent.pins[0] != -1) {
             axisIndices.push_back(i);
         }
     }
     portEXIT_CRITICAL(&hardwareMux);
 
     if (axisIndices.empty()) return;
-
-    uint32_t t;
     size_t numAxes = axisIndices.size();
-    std::vector<int32_t> s(numAxes, 0);
+
+    std::vector<MotionBlock> lookAheadQueue;
 
     portENTER_CRITICAL(&ecsMux);
-    if (motionPipeline.isEmpty()) { portEXIT_CRITICAL(&ecsMux); return; }
+    if (motionPipeline.isEmpty()) {
+        portEXIT_CRITICAL(&ecsMux);
+        return;
+    }
+
+    size_t available_blocks = motionPipeline.count();
+    size_t fetch_count = std::min(available_blocks, LOOK_AHEAD_COUNT);
+
+    for (size_t i = 0; i < fetch_count; i++) {
+        uint32_t bt;
+        std::vector<int32_t> bs;
+        if (motionPipeline.peek(i, bt, bs)) {
+            lookAheadQueue.push_back({bt, bs, 1.0f, 1.0f});
+        }
+    }
+    portEXIT_CRITICAL(&ecsMux);
+
+    if (lookAheadQueue.empty()) return;
+
+    for (size_t i = 0; i < lookAheadQueue.size() - 1; i++) {
+        const auto& curr_steps = lookAheadQueue[i].steps;
+        const auto& next_steps = lookAheadQueue[i+1].steps;
+
+        float dot_product = 0.0f;
+        float mag_curr = 0.0f;
+        float mag_next = 0.0f;
+
+        for (size_t a = 0; a < numAxes && a < curr_steps.size() && a < next_steps.size(); a++) {
+            dot_product += (float)(curr_steps[a] * next_steps[a]);
+            mag_curr += (float)(curr_steps[a] * curr_steps[a]);
+            mag_next += (float)(next_steps[a] * next_steps[a]);
+        }
+
+        if (mag_curr > 0.0f && mag_next > 0.0f) {
+            float cos_theta = dot_product / (sqrtf(mag_curr) * sqrtf(mag_next));
+            float junction_factor = (cos_theta + 1.0f) * 0.5f;
+            if (junction_factor < 0.15f) junction_factor = 0.15f;
+
+            lookAheadQueue[i].exit_speed_factor = junction_factor;
+            lookAheadQueue[i+1].entry_speed_factor = junction_factor;
+        }
+    }
+
+    uint32_t t;
+    std::vector<int32_t> s(numAxes, 0);
+    portENTER_CRITICAL(&ecsMux);
     motionPipeline.pop(t, s);
     portEXIT_CRITICAL(&ecsMux);
 
     if (t == 0) return;
+    float current_entry_factor = lookAheadQueue[0].entry_speed_factor;
+    float current_exit_factor = lookAheadQueue[0].exit_speed_factor;
 
     std::vector<AxisContext> axes(numAxes);
     uint32_t global_min_delay = 5;
 
-    portENTER_CRITICAL(&hardwareMux);
     for (size_t i = 0; i < numAxes; i++) {
         int idx = axisIndices[i];
+
+        portENTER_CRITICAL(&hardwareMux);
         const auto& ent = hardwareEntities[idx];
+        int8_t stepPin = (ent.pins.size() > 0) ? ent.pins[0] : -1;
+        int8_t dirPin  = (ent.pins.size() > 1) ? ent.pins[1] : -1;
+        int8_t minPin  = (ent.pins.size() > 3) ? ent.pins[3] : -1;
+        int8_t maxPin  = (ent.pins.size() > 4) ? ent.pins[4] : -1;
 
-        auto getPin = [&](size_t pIdx) -> int8_t {
-            return (ent.pins.size() > pIdx) ? ent.pins[pIdx] : -1;
-        };
-        auto getParam = [&](size_t prIdx, float defVal) -> float {
-            return (ent.params.size() > prIdx) ? ent.params[prIdx] : defVal;
-        };
+        float stepsPerUnit  = (ent.params.size() > 0) ? ent.params[0] : 80.0f;
+        float maxLimit      = (ent.params.size() > 1) ? ent.params[1] : -1.0f;
+        float minStepDelay  = (ent.params.size() > 2) ? ent.params[2] : 2.0f;
+        int32_t homingBack  = (ent.params.size() > 3) ? (int32_t)ent.params[3] : 0;
+        int32_t homingPost  = (ent.params.size() > 4) ? (int32_t)ent.params[4] : 0;
 
-        axes[i] = {
-            idx,
-            getPin(0), // stepPin
-            getPin(1), // dirPin
-            getPin(3), // minPin
-            getPin(4), // maxPin
-            getParam(0, 80.0f),       // stepsPerUnit
-            getParam(1, -1.0f),       // maxLimit
-            getParam(2, 2.0f),        // minStepDelay
-            (int32_t)getParam(3, 0.0f), // homingBackoffSteps
-            (int32_t)getParam(4, 0.0f), // homingPostOffset
-        };
+        bool mInit = (minPin != -1 && ent.params.size() > 5) ? (bool)ent.params[5] : true;
+        bool xInit = (maxPin != -1 && ent.params.size() > 6) ? (bool)ent.params[6] : true;
+        portEXIT_CRITICAL(&hardwareMux);
+
+        axes[i] = {idx, stepPin, dirPin, minPin, maxPin, stepsPerUnit, maxLimit, minStepDelay, homingBack, homingPost, mInit, xInit};
 
         if (axes[i].minStepDelay > (float)global_min_delay) {
             global_min_delay = (uint32_t)axes[i].minStepDelay;
         }
     }
-    portEXIT_CRITICAL(&hardwareMux);
 
     std::vector<bool> is_homing(numAxes, false);
     std::vector<int32_t> d(numAxes, 0);
@@ -118,12 +187,13 @@ void executeMotion() {
         for (int32_t i = 0; i < chunk_max_steps; i++) {
             uint32_t current_delay = base_delay_per_step;
 
-            if (use_scurve) {
+            if (use_scurve && accel_steps > 0) {
                 float factor = 0.0f;
-                if (i < accel_steps) {
-                    factor = 1.0f - sin(((float)i / (float)accel_steps) * M_PI_2);
-                } else if (i > chunk_max_steps - accel_steps) {
-                    factor = sin(((float)(i - (chunk_max_steps - accel_steps)) / (float)accel_steps) * M_PI_2);
+                if (i < (int32_t)accel_steps) {
+                    factor = (1.0f - current_entry_factor) + (current_entry_factor * (1.0f - getSCurveFactor(i, accel_steps)));
+                } else if (i > chunk_max_steps - (int32_t)accel_steps) {
+                    float scurve_val = getSCurveFactor(i - (chunk_max_steps - (int32_t)accel_steps), accel_steps);
+                    factor = (1.0f - current_exit_factor) * scurve_val;
                 }
                 current_delay += (uint32_t)(base_delay_per_step * 1.5f * factor);
             }
@@ -138,22 +208,30 @@ void executeMotion() {
 
                 bool has_physical_endstop = (direction < 0 && axes[a].minPin != -1) || (direction > 0 && axes[a].maxPin != -1);
                 if (has_physical_endstop) {
-                    bool physical_tripped = (direction < 0) ? (digitalRead(axes[a].minPin) == LOW)
-                    : (digitalRead(axes[a].maxPin) == LOW);
+                    bool physical_tripped = false;
+                    if (direction < 0 && axes[a].minPin != -1) {
+                        physical_tripped = (digitalRead(axes[a].minPin) != axes[a].minInitialState);
+                    } else if (direction > 0 && axes[a].maxPin != -1) {
+                        physical_tripped = (digitalRead(axes[a].maxPin) != axes[a].maxInitialState);
+                    }
 
                     if (physical_tripped) {
                         remaining_d[a] = 0;
 
                         if (is_homing[a]) {
-                            if (axes[a].homingPostOffset > 0 && axes[a].dirPin != -1) {
-                                digitalWrite(axes[a].dirPin, HIGH);
-                                for (int32_t p = 0; p < axes[a].homingPostOffset; p++) {
-                                    digitalWrite(axes[a].stepPin, HIGH);
-                                    SYS_DELAY_US((uint32_t)axes[a].minStepDelay);
-                                    digitalWrite(axes[a].stepPin, LOW);
-                                    SYS_DELAY_US((uint32_t)axes[a].minStepDelay);
+                            auto runHomingSteps = [](int8_t stepPin, int8_t dirPin, int32_t count, uint32_t delayUs) {
+                                if (count <= 0 || dirPin == -1) return;
+                                digitalWrite(dirPin, HIGH);
+                                for (int32_t b = 0; b < count; b++) {
+                                    digitalWrite(stepPin, HIGH);
+                                    SYS_DELAY_US(delayUs);
+                                    digitalWrite(stepPin, LOW);
+                                    SYS_DELAY_US(delayUs);
                                 }
-                            }
+                            };
+
+                            runHomingSteps(axes[a].stepPin, axes[a].dirPin, axes[a].homingBackoff, (uint32_t)axes[a].minStepDelay);
+                            runHomingSteps(axes[a].stepPin, axes[a].dirPin, axes[a].homingPostOffset, (uint32_t)axes[a].minStepDelay);
 
                             portENTER_CRITICAL(&hardwareMux);
                             hardwareEntities[axes[a].entIdx].runtimeState1 = 0;
@@ -163,7 +241,6 @@ void executeMotion() {
                     }
                 }
 
-                // Bresenham Step Logic
                 err[a] -= chunk_max_steps;
                 if (err[a] < 0) {
                     err[a] += chunk_max_steps;
@@ -178,10 +255,13 @@ void executeMotion() {
 
                     bool has_virtual = (axes[a].maxLimit > 0.0f && axes[a].maxLimit != -1.0f);
                     if (has_virtual && axes[a].minPin == -1 && axes[a].maxPin == -1) {
-                        int32_t wrap = (int32_t)(axes[a].maxLimit * axes[a].stepsPerUnit);
-                        if (wrap > 0) {
-                            if (pos >= wrap) pos -= wrap;
-                            else if (pos < 0) pos += wrap;
+                        int32_t max_limit_steps = (int32_t)(axes[a].maxLimit * axes[a].stepsPerUnit);
+                        if (pos >= max_limit_steps) {
+                            pos = max_limit_steps;
+                            remaining_d[a] = 0;
+                        } else if (pos < 0) {
+                            pos = 0;
+                            remaining_d[a] = 0;
                         }
                     }
                     portEXIT_CRITICAL(&hardwareMux);

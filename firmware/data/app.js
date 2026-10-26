@@ -1,5 +1,7 @@
-// SPDX-License-Identifier: MIT
-// Copyright (c) 2026 TechruWolf & Gemini
+/* ==========================================================
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 TechruWolf & Gemini
+ * ========================================================== */
 
 // ============================================================================
 // 1. GLOBAL STATE & WEBSOCKET CONNECTION
@@ -16,6 +18,7 @@ const bufferWarning = document.getElementById('bufferWarning');
 
 let waitingForAck = false;
 let transmissionDelay = 0;
+let MaxTransmissionDelay = 5000;
 let hardwareRegistry = [];
 
 const DEVICE_AXIS = 0;
@@ -42,31 +45,100 @@ const getSensorMeta = (sensorType) => {
     }
 };
 
+// --- THEME & BOOT SCREEN UTILS ---
+function setTheme(themeName, btn) {
+    document.documentElement.setAttribute('data-theme', themeName);
+    document.querySelectorAll('.theme-btn').forEach(b => b.classList.remove('active-theme'));
+    if (btn) btn.classList.add('active-theme');
+}
+
+let bootProgress = 0;
+function addBootLog(msg) {
+    const logContainer = document.getElementById('bootLog');
+    if (!logContainer) return;
+    const timeTag = (performance.now() / 1000).toFixed(2);
+    logContainer.innerHTML += `[${timeTag}s] ${msg}<br>`;
+    logContainer.scrollTop = logContainer.scrollHeight;
+}
+
+function updateBootProgress(stepVal, statusText) {
+    bootProgress = Math.min(100, bootProgress + stepVal);
+    const bar = document.getElementById('bootProgressBar');
+    if (bar) bar.style.width = bootProgress + '%';
+    const txt = document.getElementById('bootStatusText');
+    if (txt) txt.innerText = statusText;
+
+    if (bootProgress >= 100) {
+        if (txt) txt.innerText = "System initialization complete. Ready.";
+        const enterBtn = document.getElementById('enterAppBtn');
+        if (enterBtn) enterBtn.style.display = 'inline-block';
+    }
+}
+
+function dismissBootScreen() {
+    const screen = document.getElementById('bootScreen');
+    if (screen) {
+        screen.style.opacity = '0';
+        setTimeout(() => { screen.style.display = 'none'; }, 600);
+    }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+    addBootLog("Initializing  web client environment...");
+    updateBootProgress(25, "Loading Three.js graphics context...");
+    setTimeout(() => {
+        addBootLog("Three.js engine ready.");
+        updateBootProgress(25, "Establishing WebSocket connection...");
+    }, 400);
+});
+
 ws.onopen = () => {
-    statusEl.innerText = "Connected!";
-    statusEl.style.color = "#a6e3a1";
+    statusEl.innerHTML = `Connected! <span id="pingValue" style="margin-left: 10px; font-weight: normal; font-size: 11px; color: var(--peach);">Ping: -- ms</span>`;
+    statusEl.style.color = "var(--green)";
+
+    addBootLog("WebSocket connection established successfully.");
+    updateBootProgress(30, "Requesting hardware registry from MCU...");
+
+    pingStartTime = performance.now();
     ws.send("GFG_JSON");
+
     setTimeout(() => {
         hardwareRegistry.forEach(ent => {
-            if (ent.type === DEVICE_GPIO) {
-                ws.send(`GPIO,${ent.name}`);
-            }
+            if (ent.type === DEVICE_GPIO) ws.send(`GPIO,${ent.name}`);
         });
     }, 500);
+
+    setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN && pingStartTime === 0) {
+            pingStartTime = performance.now();
+            ws.send("GET_STATS");
+        }
+    }, 4000);
 };
 
 ws.onclose = () => {
     statusEl.innerText = "Disconnected!";
-    statusEl.style.color = "#f38ba8";
+    statusEl.style.color = "var(--red)";
+    addBootLog("⚠️ WebSocket disconnected.");
 };
 
 ws.onmessage = (event) => {
+    if (pingStartTime > 0) {
+        const latency = performance.now() - pingStartTime;
+        pingStartTime = 0;
+
+        const pingEl = document.getElementById('pingValue');
+        if (pingEl) {
+            const color = latency < 50 ? "var(--green)" : (latency < 150 ? "var(--yellow)" : "var(--red)");
+            pingEl.innerHTML = `Ping: <b style="color: ${color}">+${latency.toFixed(2)} ms</b>`;        }
+    }
     const msg = event.data;
 
     if (msg.startsWith("CFG_RESP,")) {
         try {
             hardwareRegistry = JSON.parse(msg.substring(9));
-            console.log("Hardware Registry loaded from MCU:", hardwareRegistry);
+            addBootLog(`Loaded ${hardwareRegistry.length} hardware entities.`);
+            updateBootProgress(20, "Building dynamic hardware components...");
             buildDynamicUI();
         } catch (e) {
             console.error("Failed to parse hardware config JSON:", e);
@@ -76,11 +148,7 @@ ws.onmessage = (event) => {
         const parts = msg.split(',');
 
         if (parts.length >= 4) {
-            const loopTimeUs = parseFloat(parts[1]);
-            const freeHeap = parseFloat(parts[2]);
-            const totalHeap = parseFloat(parts[3]);
-
-            updateSystemDashboardUI(loopTimeUs, freeHeap, totalHeap);
+            updateSystemDashboardUI(parseFloat(parts[1]), parseFloat(parts[2]), parseFloat(parts[3]));
         }
 
         let partIdx = 4;
@@ -108,15 +176,15 @@ ws.onmessage = (event) => {
         updateVisualizer(axisPositionsMap["X"] || 0, axisPositionsMap["Y"] || 0, axisPositionsMap["Z"] || 0);
     }
     else if (msg === "SCA" || msg === "SAVE_CONFIG_RUNTIME_ACK") {
+        waitingForAck = false;
+        isStreaming = false;
+        transmissionDelay = 0;
         const msgEl = document.getElementById('configStatusMsg');
         if (msgEl) {
-            msgEl.style.color = "#a6e3a1";
+            msgEl.style.color = "var(--green)";
             msgEl.innerText = "✅ Saved successfully! Reloading page in 3s...";
         }
-
-        setTimeout(() => {
-            location.reload();
-        }, 3000);
+        setTimeout(() => location.reload(), 3000);
     }
     else if (["ACK", "HACK", "G_ACK", "EMG_ACK"].includes(msg)) {
         waitingForAck = false;
@@ -127,16 +195,68 @@ ws.onmessage = (event) => {
             updateGpioStateUI(parts[1], parseInt(parts[2]));
         }
     }
-    else if (msg.startsWith("BUF_FULL")) {
-        waitingForAck = false;
-        transmissionDelay += 10;
-        bufferWarning.innerText = `⚠️ Buffer Full! Reducing stream speed (+${transmissionDelay}ms)`;
+    else if (msg.startsWith("{")) {
+        try {
+            const res = JSON.parse(msg);
+            if (res.status === "ACK") {
+                waitingForAck = false;
+                if (transmissionDelay > 0) transmissionDelay = Math.max(0, transmissionDelay - 2);
+                if (transmissionDelay === 0) bufferWarning.innerText = "";
+            }
+            else if (res.status === "BUF_FULL") {
+                waitingForAck = false;
+                transmissionDelay = Math.min(MaxTransmissionDelay, transmissionDelay + 15);
+                bufferWarning.innerText = `⚠️ Buffer Full! Throttle active (+${transmissionDelay}ms)`;
+            } else if (isStreaming && res.status === "ERR_GCODE") {
+                waitingForAck = false;
+                bufferWarning.innerText = `❌ G-code Syntax Error on MCU!`;
+            }
+
+            if (res.head !== undefined && res.tail !== undefined && res.count !== undefined) {
+                document.getElementById('bufHeadVal').innerText = res.head;
+                document.getElementById('bufTailVal').innerText = res.tail;
+                document.getElementById('bufCountText').innerText = `${res.count} / ${res.size}`;
+
+                let percent = (res.count / res.size) * 100;
+                let bar = document.getElementById('bufProgressBar');
+                bar.style.width = percent + "%";
+                bar.style.backgroundColor = percent > 85 ? "var(--red)" : (percent > 50 ? "var(--peach)" : "var(--green)");
+            }
+        } catch (e) {
+            console.error("Failed to parse JSON status message:", e);
+        }
     }
 };
 
+// --- SYSTEM DASHBOARD UI UPDATER ---
+function updateSystemDashboardUI(loopTimeUs, freeHeap, totalHeap) {
+    const loopMs = (loopTimeUs / 1000.0).toFixed(2);
+    const cpuLoadPercent = Math.min(100, (loopTimeUs / 20000.0) * 100).toFixed(1);
+
+    const cpuText = document.getElementById('cpuLoadText');
+    if (cpuText) cpuText.innerText = `${loopMs} ms (${cpuLoadPercent}%)`;
+    const cpuBar = document.getElementById('cpuBar');
+    if (cpuBar) {
+        cpuBar.style.width = `${cpuLoadPercent}%`;
+        cpuBar.style.backgroundColor = cpuLoadPercent > 80 ? "var(--red)" : (cpuLoadPercent > 50 ? "var(--peach)" : "var(--green)");
+    }
+
+    const freeKb = (freeHeap / 1024.0).toFixed(1);
+    const totalKb = (totalHeap / 1024.0).toFixed(1);
+    const ramUsagePercent = totalHeap > 0 ? (((totalHeap - freeHeap) / totalHeap) * 100).toFixed(1) : 0;
+
+    const ramText = document.getElementById('ramText');
+    if (ramText) ramText.innerText = `${freeKb} KB / ${totalKb} KB (${ramUsagePercent}%)`;
+    const ramBar = document.getElementById('ramBar');
+    if (ramBar) {
+        ramBar.style.width = `${ramUsagePercent}%`;
+        ramBar.style.backgroundColor = ramUsagePercent > 85 ? "var(--red)" : "var(--green)";
+    }
+}
+
 
 // ============================================================================
-// 2. DYNAMIC UI GENERATION & CONFIGURATION TEXTAREA
+// 2. DYNAMIC UI & CONFIGURATOR
 // ============================================================================
 function syncRegistryState() {
     const configTextArea = document.getElementById('dynamicConfigJson');
@@ -154,14 +274,11 @@ function buildDynamicUI() {
         hardwareRegistry.forEach(ent => {
             if (isAxisDeviceJS(ent.type)) {
                 const canHome = isHomableAxisJS(ent);
-                const homeBtn = canHome
-                ? `<button onclick="homeAxis('${ent.name}')" style="padding: 5px 10px; background: #f9e2af; color: #11111b; border: none; border-radius: 4px; cursor: pointer; margin-left: 10px;">🏠 Home</button>`
-                : '';
-
-                jogHtml += `<div class="axis-control-row" style="margin: 10px 0; padding: 8px; background: #181825; border-radius: 6px;">
-                <span style="font-weight: bold; color: #89b4fa; width: 110px; display: inline-block;">${ent.name} (Axis):</span>
-                <button onclick="jogAxisDynamic('${ent.name}', -1)" style="padding: 5px 10px; background: #313244; color: #cdd6f4; border: none; border-radius: 4px; cursor: pointer;">(-) Decrease</button>
-                <button onclick="jogAxisDynamic('${ent.name}', 1)" style="padding: 5px 10px; background: #313244; color: #cdd6f4; border: none; border-radius: 4px; cursor: pointer;">(+) Increase</button>
+                const homeBtn = canHome ? `<button onclick="homeAxis('${ent.name}')" style="padding: 5px 10px; background: var(--peach); color: var(--bg-color); border: none; border-radius: 4px; cursor: pointer; margin-left: 10px; width:auto;">🏠 Home</button>` : '';
+                jogHtml += `<div style="margin: 10px 0; padding: 8px; background: var(--surface-color); border-radius: 6px; border: 1px solid var(--overlay-color);">
+                <span style="font-weight: bold; color: var(--blue); width: 80px; display: inline-block;">${ent.name}:</span>
+                <button onclick="jogAxisDynamic('${ent.name}', -1)" style="padding: 5px 10px; background: var(--overlay-color); color: var(--text-color); border: none; border-radius: 4px; cursor: pointer; width:auto;">(-) Step</button>
+                <button onclick="jogAxisDynamic('${ent.name}', 1)" style="padding: 5px 10px; background: var(--overlay-color); color: var(--text-color); border: none; border-radius: 4px; cursor: pointer; width:auto; margin-left:5px;">(+) Step</button>
                 ${homeBtn}
                 </div>`;
             }
@@ -169,24 +286,19 @@ function buildDynamicUI() {
         jogContainer.innerHTML = jogHtml;
     }
 
-    // 2. Render PWM & Sensor Devices
+    // 2. Render Sensors & PWM Control
     const PWMContainer = document.getElementById('dynamicPWMContainer');
     if (PWMContainer) {
-        let tempHtml = '<h3>Sensors & PWM Control Devices</h3>';
+        let tempHtml = '<span style="font-weight:bold; color:var(--blue); font-size:13px;">🔥 Sensors & PWM Control</span>';
         hardwareRegistry.forEach(ent => {
             if (ent.type === DEVICE_PWM_SENSOR) {
                 const hasPWMOut = (ent.pins && ent.pins.length > 0 && ent.pins[0] !== -1);
                 const currentTarget = ent.params?.[0] || 0;
-                const sensorType = (ent.params && ent.params.length > 8) ? ent.params[8] : 1;
-                const meta = getSensorMeta(sensorType);
-                const controlHtml = hasPWMOut
-                ? `<input type="number" id="input_${ent.name}" value="${currentTarget}" step="1" style="width: 90px; padding: 5px; background: #11111b; border: 1px solid #45475a; color: #cdd6f4; border-radius: 4px;">
-                <button onclick="sendIndividualTemp('${ent.name}')" style="padding: 5px 15px; background: #89b4fa; color: #11111b; border: none; border-radius: 4px; font-weight: bold; cursor: pointer;">Set</button>`
-                : `<span style="font-size: 11px; color: #6c7086; font-style: italic;">(${meta.name})</span>`;
+                const meta = getSensorMeta((ent.params && ent.params.length > 8) ? ent.params[8] : 1);
+                const controlHtml = hasPWMOut ? `<input type="number" id="input_${ent.name}" value="${currentTarget}" step="1" style="width: 70px; padding: 4px; background: var(--bg-color); border: 1px solid var(--overlay-color); color: var(--text-color); border-radius: 4px;"> <button onclick="sendIndividualTemp('${ent.name}')" style="padding: 4px 10px; background: var(--blue); color: var(--bg-color); border: none; border-radius: 4px; width:auto;">Set</button>` : '';
 
-                tempHtml += `<div class="PWM-control-row" style="margin: 10px 0; padding: 8px; background: #181825; border-radius: 6px; display: flex; align-items: center; gap: 10px;">
-                <span style="font-weight: bold; color: #fab387; width: 130px;">${ent.name}:</span>
-                <span>Value: <strong id="temp_${ent.name}">0.0</strong> ${meta.unit}</span>
+                tempHtml += `<div style="margin: 6px 0; padding: 8px; background: var(--bg-color); border-radius: 6px; border: 1px solid var(--overlay-color); display: flex; align-items: center; justify-content: space-between;">
+                <span>${ent.name}: <strong id="temp_${ent.name}" style="color:var(--peach)">0.0</strong> ${meta.unit}</span>
                 ${controlHtml}
                 </div>`;
             }
@@ -200,9 +312,7 @@ function buildDynamicUI() {
         coordsContainer.innerHTML = "";
         hardwareRegistry.forEach(ent => {
             if (isAxisDeviceJS(ent.type)) {
-                const span = document.createElement('span');
-                span.innerHTML = `${ent.name}: <strong id="pos_${ent.name}">0.0</strong>`;
-                coordsContainer.appendChild(span);
+                coordsContainer.innerHTML += `<div><strong>${ent.name}:</strong> <span id="pos_${ent.name}" style="color:var(--green)">0.0</span> mm</div>`;
             }
         });
     }
@@ -210,34 +320,24 @@ function buildDynamicUI() {
     // 4. Render GPIO Controls
     const gpioContainer = document.getElementById('dynamicGPIOContainer');
     if (gpioContainer) {
-        let gpioHtml = '<h3>GPIO Control</h3>';
+        let gpioHtml = '<span style="font-weight:bold; color:var(--blue); font-size:13px;">🔌 GPIO Controls</span>';
         let hasGpio = false;
-
         hardwareRegistry.forEach(ent => {
             if (ent.type === DEVICE_GPIO) {
                 hasGpio = true;
                 const isOutput = ent.params?.[0] === 1;
-                const actionButtonHtml = isOutput
-                ? `<div><button id="gpio_btn_${ent.name}" onclick="toggleGpioState('${ent.name}')" style="padding: 6px 16px; background: #89b4fa; color: #11111b; border: none; border-radius: 4px; font-weight: bold; cursor: pointer;">Toggle</button></div>`
-                : `<span style="font-size: 11px; color: #6c7086; font-style: italic;">(Read-only Input)</span>`;
-
-                gpioHtml += `<div class="gpio-control-row" style="margin: 10px 0; padding: 10px; background: #181825; border-radius: 6px; display: flex; align-items: center; justify-content: space-between;">
-                <div style="display: flex; align-items: center; gap: 10px;">
-                <span style="font-weight: bold; color: #a6e3a1;">${ent.name}:</span>
-                <span id="gpio_status_${ent.name}" style="padding: 2px 8px; font-size: 12px; font-weight: bold; background: #313244; color: #cdd6f4; border-radius: 4px;">READING...</span>
-                </div>
-                ${actionButtonHtml}
+                const btn = isOutput ? `<button onclick="toggleGpioState('${ent.name}')" style="width: 70px; margin-top:0; padding:4px; background: var(--overlay-color); color: var(--text-color);" id="gpio_btn_${ent.name}">Toggle</button>` : '';
+                gpioHtml += `<div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg-color); padding: 8px; border-radius: 6px; border: 1px solid var(--overlay-color); margin-top:6px;">
+                <span>${ent.name} <span id="gpio_status_${ent.name}" style="font-size:11px; color:var(--green);">(READING)</span></span>
+                ${btn}
                 </div>`;
             }
         });
-
-        if (!hasGpio) {
-            gpioHtml += '<span style="color: #a6adc8; font-style: italic;">No GPIO devices configured.</span>';
-        }
+        if (!hasGpio) gpioHtml += '<div style="font-size:12px; color:#a6adc8; font-style:italic; margin-top:5px;">No GPIO devices configured.</div>';
         gpioContainer.innerHTML = gpioHtml;
     }
 
-    // 5. Render Pipeline Rules
+    // 5. Render Pipeline Logic Rules
     let pipelineContainer = document.getElementById('dynamicPipelineContainer');
     if (!pipelineContainer) {
         const jogContainer = document.getElementById('dynamicJogContainer');
@@ -250,7 +350,7 @@ function buildDynamicUI() {
     }
 
     if (pipelineContainer) {
-        let pipelineHtml = '<h3>Pipeline Logic Rules</h3>';
+        let pipelineHtml = '<span style="font-weight:bold; color:var(--blue); font-size:13px;">⚡ Automation Pipelines</span>';
         let hasPipeline = false;
 
         hardwareRegistry.forEach(ent => {
@@ -270,10 +370,10 @@ function buildDynamicUI() {
 
                     const getSourceDesc = (idx, paramVal, defaultVal) => {
                         if (idx >= 0 && hardwareRegistry[idx]) {
-                            return `<span style="color: #89b4fa;">Device: ${hardwareRegistry[idx].name}</span>`;
+                            return `<span style="color: var(--blue);">Device: ${hardwareRegistry[idx].name}</span>`;
                         } else {
                             const val = (paramVal !== undefined) ? paramVal : defaultVal;
-                            return `<span style="color: #fab387;">Constant: ${val}</span>`;
+                            return `<span style="color: var(--peach);">Constant: ${val}</span>`;
                         }
                     };
 
@@ -283,13 +383,13 @@ function buildDynamicUI() {
                     const tgtName = (tgtIdx >= 0 && hardwareRegistry[tgtIdx]) ? hardwareRegistry[tgtIdx].name : `Index ${tgtIdx}`;
 
                     detailsHtml = `
-                    <div style="grid-column: span 2; background: #11111b; padding: 6px; border-radius: 4px; margin-bottom: 5px; color: #fab387; font-family: monospace;">
+                    <div style="grid-column: span 2; background: var(--bg-color); padding: 6px; border-radius: 4px; margin-bottom: 5px; color: var(--peach); font-family: monospace;">
                     📐 FMA Formula: Target = (A * B) + C
                     </div>
                     <div>A Factor: ${descA}</div>
                     <div>B Factor: ${descB}</div>
                     <div>C Factor: ${descC}</div>
-                    <div>Target Device: <strong style="color: #a6e3a1;">${tgtName}</strong></div>
+                    <div>Target Device: <strong style="color: var(--green);">${tgtName}</strong></div>
                     `;
                 } else {
                     const srcIdx = pins[0] ?? -1;
@@ -304,21 +404,21 @@ function buildDynamicUI() {
                     const valFalse = params[3] !== undefined ? params[3] : 'Ignored/Pass';
 
                     detailsHtml = `
-                    <div style="grid-column: span 2; background: #11111b; padding: 6px; border-radius: 4px; margin-bottom: 5px; color: #89b4fa; font-family: monospace;">
+                    <div style="grid-column: span 2; background: var(--bg-color); padding: 6px; border-radius: 4px; margin-bottom: 5px; color: var(--blue); font-family: monospace;">
                     🔗 Mode: Standard (Source ➔ Target)
                     </div>
-                    <div>Source Device: <strong style="color: #89b4fa;">${srcName}</strong></div>
-                    <div>Target Device: <strong style="color: #a6e3a1;">${tgtName}</strong></div>
-                    <div>Min Trigger (&lt;): <strong>${minTrig}</strong></div>
-                    <div>Max Trigger (&gt;): <strong>${maxTrig}</strong></div>
-                    <div>Val on True: <strong style="color: #fab387;">${valTrue}</strong></div>
-                    <div>Val on False: <strong style="color: #f38ba8;">${valFalse}</strong></div>
+                    <div>Source Device: <strong style="color: var(--blue);">${srcName}</strong></div>
+                    <div>Target Device: <strong style="color: var(--green);">${tgtName}</strong></div>
+                    <div>Min Trigger: <strong>${minTrig}</strong></div>
+                    <div>Max Trigger: <strong>${maxTrig}</strong></div>
+                    <div>Val on True: <strong style="color: var(--peach);">${valTrue}</strong></div>
+                    <div>Val on False: <strong style="color: var(--red);">${valFalse}</strong></div>
                     `;
                 }
 
-                pipelineHtml += `<div style="margin: 10px 0; padding: 10px; background: #181825; border-radius: 6px; border-left: 4px solid ${isFMA ? '#fab387' : '#f9e2af'};">
-                <div style="font-weight: bold; color: ${isFMA ? '#fab387' : '#f9e2af'}; margin-bottom: 5px;">⚡ ${ent.name} <span style="font-size: 11px; opacity: 0.8;">(${isFMA ? 'FMA Calculation' : 'If-Else Rule'})</span></div>
-                <div style="font-size: 12px; color: #cdd6f4; display: grid; grid-template-columns: 1fr 1fr; gap: 5px;">
+                pipelineHtml += `<div style="margin: 10px 0; padding: 10px; background: var(--bg-color); border-radius: 6px; border-left: 4px solid ${isFMA ? 'var(--peach)' : 'var(--blue)'}; border: 1px solid var(--overlay-color);">
+                <div style="font-weight: bold; color: ${isFMA ? 'var(--peach)' : 'var(--blue)'}; margin-bottom: 5px;">⚡ ${ent.name} <span style="font-size: 11px; opacity: 0.8;">(${isFMA ? 'FMA Calculation' : 'If-Else Rule'})</span></div>
+                <div style="font-size: 12px; color: var(--text-color); display: grid; grid-template-columns: 1fr 1fr; gap: 5px;">
                 ${detailsHtml}
                 </div>
                 </div>`;
@@ -326,7 +426,7 @@ function buildDynamicUI() {
         });
 
         if (!hasPipeline) {
-            pipelineHtml += '<span style="color: #a6adc8; font-style: italic;">No pipeline rules configured.</span>';
+            pipelineHtml += '<div style="font-size: 12px; color: #a6adc8; font-style: italic; margin-top:5px;">No pipeline rules configured.</div>';
         }
         pipelineContainer.innerHTML = pipelineHtml;
     }
@@ -334,50 +434,20 @@ function buildDynamicUI() {
     syncRegistryState();
 }
 
-function saveDynamicRegistryFromText() {
-    const configTextArea = document.getElementById('dynamicConfigJson');
-    const msgEl = document.getElementById('configStatusMsg');
-    if (!configTextArea) return;
-
-    try {
-        hardwareRegistry = JSON.parse(configTextArea.value);
-        if (ws.readyState === WebSocket.OPEN) {
-            ws.send("SAVE_CONFIG_JSON," + JSON.stringify(hardwareRegistry));
-            if (msgEl) {
-                msgEl.style.color = "#fab387";
-                msgEl.innerText = "⏳ Sending new configuration (Runtime RAM)...";
-            }
-        } else {
-            alert("Lost WebSocket connection!");
-        }
-    } catch (e) {
-        if (msgEl) {
-            msgEl.style.color = "#f38ba8";
-            msgEl.innerText = "❌ JSON Syntax Error: " + e.message;
-        }
-        alert("JSON syntax error! Please check brackets and commas.");
-    }
-}
-
 
 // ============================================================================
-// 3. MANUAL CONTROL & DYNAMIC JOG
+// 3. MANUAL CONTROL
 // ============================================================================
 function jogAxisDynamic(axisName, direction) {
     const stepDist = parseFloat(document.getElementById('jogStep').value) * direction;
-    const stepsArray = hardwareRegistry
-    .filter(ent => isAxisDeviceJS(ent.type))
-    .map(ent => {
+    const stepsArray = hardwareRegistry.filter(ent => isAxisDeviceJS(ent.type)).map(ent => {
         if (ent.name === axisName) {
             const stepsPerUnit = (ent.params && ent.params[0] > 0) ? ent.params[0] : 80;
             return Math.round(stepDist * stepsPerUnit);
         }
         return 0;
     });
-
-    if (ws.readyState === WebSocket.OPEN) {
-        ws.send(`50,${stepsArray.join(",")}`);
-    }
+    if (ws.readyState === WebSocket.OPEN) ws.send(`50,${stepsArray.join(",")}`);
 }
 
 function homeAxis(axisName) {
@@ -386,29 +456,30 @@ function homeAxis(axisName) {
 
 function sendIndividualTemp(entityName) {
     const inputEl = document.getElementById(`input_${entityName}`);
-    if (inputEl && ws.readyState === WebSocket.OPEN) {
-        ws.send(`SET_PWM,${entityName},${inputEl.value}`);
-    }
+    if (inputEl && ws.readyState === WebSocket.OPEN) ws.send(`SET_PWM,${entityName},${inputEl.value}`);
 }
 
 function turnOffAllPWM() {
     hardwareRegistry.forEach(ent => {
-        if (ent.type === DEVICE_PWM_SENSOR) {
-            const hasPWMOut = (ent.pins && ent.pins.length > 0 && ent.pins[0] !== -1);
-            if (hasPWMOut) {
-                const inputEl = document.getElementById(`input_${ent.name}`);
-                if (inputEl) inputEl.value = 0;
-                if (ws.readyState === WebSocket.OPEN) ws.send(`SET_PWM,${ent.name},0`);
-            }
+        if (ent.type === DEVICE_PWM_SENSOR && ent.pins?.[0] !== -1) {
+            const inputEl = document.getElementById(`input_${ent.name}`);
+            if (inputEl) inputEl.value = 0;
+            if (ws.readyState === WebSocket.OPEN) ws.send(`SET_PWM,${ent.name},0`);
         }
     });
 }
 
-function setGpioState(entityName, state) {
-    if (ws.readyState === WebSocket.OPEN) {
-        ws.send(`GPIO,${entityName},${state}`);
-    } else {
-        alert("Lost WebSocket connection!");
+function toggleGpioState(entityName) {
+    const statusBadge = document.getElementById(`gpio_status_${entityName}`);
+    const targetState = (statusBadge && statusBadge.innerText.includes("ON")) ? 0 : 1;
+    if (ws.readyState === WebSocket.OPEN) ws.send(`GPIO,${entityName},${targetState}`);
+}
+
+function updateGpioStateUI(entityName, state) {
+    const badge = document.getElementById(`gpio_status_${entityName}`);
+    if (badge) {
+        badge.innerText = state ? "ON" : "OFF";
+        badge.style.color = state ? "var(--green)" : "var(--red)";
     }
 }
 
@@ -416,27 +487,7 @@ function emergencyStop() {
     if (ws.readyState === WebSocket.OPEN) ws.send("EMG_STOP");
     isStreaming = false;
     streamInfo.innerText = "🚨 EMERGENCY STOP SENT!";
-    bufferWarning.innerText = "⚠️ System is locked out due to emergency!";
-    waitingForAck = false;
-
-    const btn = document.getElementById('emgBtn');
-    if (btn) {
-        btn.innerText = "⏳ Locking System...";
-        btn.style.backgroundColor = "#fab387";
-        btn.onclick = null;
-        setTimeout(() => {
-            btn.innerText = "🔄 REBOOT";
-            btn.style.backgroundColor = "#a6e3a1";
-            btn.style.color = "#11111b";
-            btn.onclick = resetMcu;
-        }, 3000);
-    }
-}
-
-function resetMcu() {
-    if (ws.readyState === WebSocket.OPEN) ws.send("R_MCU");
-    streamInfo.innerText = "🔄 Sending reboot command";
-    setTimeout(() => location.reload(), 3000);
+    bufferWarning.innerText = "⚠️ System locked!";
 }
 
 
@@ -444,60 +495,60 @@ function resetMcu() {
 // 4. 3D VISUALIZER (THREE.JS)
 // ============================================================================
 const container = document.getElementById('canvas-container');
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x11111b);
-
-const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
-camera.position.set(100, 250, 300);
-camera.lookAt(100, 0, 100);
-
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setSize(container.clientWidth, container.clientHeight);
-container.appendChild(renderer.domElement);
-
-window.addEventListener('resize', () => {
-    camera.aspect = container.clientWidth / container.clientHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(container.clientWidth, container.clientHeight);
-});
-
-const gridHelper = new THREE.GridHelper(200, 20, 0x89b4fa, 0x45475a);
-gridHelper.position.set(100, 0, 100);
-scene.add(gridHelper);
-
-const hotendMesh = new THREE.Mesh(
-    new THREE.SphereGeometry(6, 32, 32),
-                                  new THREE.MeshBasicMaterial({ color: 0xf38ba8 })
-);
-scene.add(hotendMesh);
-
-const maxTrailPoints = 500;
+let scene, camera, renderer, nozzleMesh, trailGeometry, trailLine;
 let trailPoints = [];
-const trailGeometry = new THREE.BufferGeometry();
-const trailLine = new THREE.Line(trailGeometry, new THREE.LineBasicMaterial({ color: 0x89b4fa, linewidth: 2 }));
-scene.add(trailLine);
 
-function updateVisualizer(x, y, z) {
-    hotendMesh.position.set(x, z, y);
+if (container) {
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x11111b);
 
-    ['posX', 'posY', 'posZ'].forEach((id, idx) => {
-        const el = document.getElementById(id);
-        if (el) el.innerText = [x, y, z][idx].toFixed(1);
+    camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+    camera.position.set(100, 250, 300);
+    camera.lookAt(100, 0, 100);
+
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    container.appendChild(renderer.domElement);
+
+    const gridHelper = new THREE.GridHelper(200, 20, 0x89b4fa, 0x45475a);
+    gridHelper.position.set(100, 0, 100);
+    scene.add(gridHelper);
+
+    nozzleMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(15, 10, 15),
+                                new THREE.MeshStandardMaterial({ color: 0x89b4fa, roughness: 0.3 })
+    );
+    scene.add(nozzleMesh);
+
+    trailGeometry = new THREE.BufferGeometry();
+    trailLine = new THREE.Line(trailGeometry, new THREE.LineBasicMaterial({ color: 0xf38ba8, linewidth: 2 }));
+    scene.add(trailLine);
+
+    window.addEventListener('resize', () => {
+        if (!container) return;
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(container.clientWidth, container.clientHeight);
     });
 
+    function animateThree() {
+        requestAnimationFrame(animateThree);
+        renderer.render(scene, camera);
+    }
+    animateThree();
+}
+
+function updateVisualizer(x, y, z) {
+    if (nozzleMesh) {
+        nozzleMesh.position.set(x, z, y);
         const currentPos = new THREE.Vector3(x, z, y);
         if (trailPoints.length === 0 || trailPoints[trailPoints.length - 1].distanceTo(currentPos) > 0.5) {
             trailPoints.push(currentPos);
-            if (trailPoints.length > maxTrailPoints) trailPoints.shift();
-            trailGeometry.setFromPoints(trailPoints);
+            if (trailPoints.length > 500) trailPoints.shift();
+            if (trailGeometry) trailGeometry.setFromPoints(trailPoints);
         }
+    }
 }
-
-function animate() {
-    requestAnimationFrame(animate);
-    renderer.render(scene, camera);
-}
-animate();
 
 
 // ============================================================================
@@ -506,6 +557,8 @@ animate();
 let isAbsoluteMode = true;
 let isAbsoluteExtrusion = true;
 let axisPositions = {};
+let activeAxisNames = [];
+let feedrate = 1200;
 
 async function processAndStreamGCode() {
     const fileInput = document.getElementById('gcodeFile');
@@ -521,69 +574,93 @@ async function processAndStreamGCode() {
     let commandBatch = [];
 
     axisPositions = {};
+    activeAxisNames = [];
     hardwareRegistry.forEach(ent => {
-        if (isAxisDeviceJS(ent.type)) axisPositions[ent.name] = 0.0;
+        if (isAxisDeviceJS(ent.type)) {
+            axisPositions[ent.name] = 0.0;
+            activeAxisNames.push(ent.name);
+        }
     });
 
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i].trim().toUpperCase();
-            if (!line || line.startsWith(';') || line.startsWith('(')) continue;
-            if (line === 'G90') { isAbsoluteMode = true; continue; }
-            if (line === 'G91') { isAbsoluteMode = false; continue; }
-            if (line === 'M82') { isAbsoluteExtrusion = true; continue; }
-            if (line === 'M83') { isAbsoluteExtrusion = false; continue; }
+    for (let i = 0; i < lines.length; i++) {
+        let rawLine = lines[i].split(';')[0];
+        rawLine = rawLine.split('(')[0];
+        const line = rawLine.trim().toUpperCase();
 
-            if (line.startsWith('G0') || line.startsWith('G1')) {
-                const cmd = parseGLineDynamic(line);
-                if (cmd) commandBatch.push(cmd);
-            } else if (line.startsWith('G28')) {
+        if (!line) continue;
+        if (line === 'G90') { isAbsoluteMode = true; continue; }
+        if (line === 'G91') { isAbsoluteMode = false; continue; }
+        if (line === 'M82') { isAbsoluteExtrusion = true; continue; }
+        if (line === 'M83') { isAbsoluteExtrusion = false; continue; }
+
+        if (line.startsWith('G0') || line.startsWith('G1')) {
+            const cmd = parseGLineDynamic(line);
+            if (cmd) commandBatch.push(cmd);
+        } else if (line.startsWith('G28')) {
+            const parts = line.split(/\s+/);
+            let homedAxes = [];
+            parts.forEach((p, idx) => {
+                if (idx === 0) return;
+                const code = p.charAt(0).toUpperCase();
+                const matched = hardwareRegistry.find(ent => isAxisDeviceJS(ent.type) && ent.name.toUpperCase().startsWith(code));
+                if (matched) {
+                    homedAxes.push(matched.name);
+                }
+            });
+
+            if (homedAxes.length > 0) {
+                homedAxes.forEach(axisName => {
+                    commandBatch.push(`HOME,${axisName}`);
+                    axisPositions[axisName] = 0.0;
+                });
+            } else {
                 commandBatch.push("HOME,ALL");
                 Object.keys(axisPositions).forEach(k => axisPositions[k] = 0.0);
             }
-
-            if (i % 50 === 0) {
-                const percent = ((i / lines.length) * 50).toFixed(1);
-                progressBar.style.width = percent + "%";
-                progressText.innerText = `Progress: ${percent}% (Dynamic Parsing)`;
-                lineInfo.innerText = `${i} / ${lines.length} lines`;
-                await new Promise(r => setTimeout(r, 0));
-            }
         }
 
-        streamInfo.innerText = `Successfully parsed ${commandBatch.length} dynamic commands. Starting stream...`;
-        isStreaming = true;
+        if (i % 50 === 0) {
+            const percent = ((i / lines.length) * 50).toFixed(1);
+            progressBar.style.width = percent + "%";
+            progressText.innerText = `Progress: ${percent}% (Dynamic Parsing)`;
+            lineInfo.innerText = `${i} / ${lines.length} lines`;
+            await new Promise(r => setTimeout(r, 0));
+        }
+    }
 
-        for (let i = 0; i < commandBatch.length; i++) {
-            if (!isStreaming || ws.readyState !== WebSocket.OPEN) break;
+    streamInfo.innerText = `Successfully parsed ${commandBatch.length} dynamic commands. Starting stream with buffer control...`;
+    isStreaming = true;
 
-            waitingForAck = true;
-            ws.send(commandBatch[i]);
+    for (let i = 0; i < commandBatch.length; i++) {
+        if (!isStreaming || ws.readyState !== WebSocket.OPEN) break;
 
-            let waitTime = 0;
-            while (waitingForAck && waitTime < 2000) {
-                if (!isStreaming) break;
-                await new Promise(r => setTimeout(r, 5));
-                waitTime += 5;
-            }
+        waitingForAck = true;
+        ws.send(commandBatch[i]);
 
+        let waitTime = 0;
+        while (waitingForAck && waitTime < 2000) {
             if (!isStreaming) break;
-            if (waitingForAck) {
-                streamInfo.innerText = "Warning: timeout! Stopping stream.";
-                break;
-            }
-
-            if (transmissionDelay > 0) {
-                await new Promise(r => setTimeout(r, transmissionDelay));
-            }
+            await new Promise(r => setTimeout(r, 5));
+            waitTime += 5;
         }
 
-        streamInfo.innerText = "G-code file streamed successfully with dynamic configuration!";
-        progressBar.style.width = "100%";
+        if (!isStreaming) break;
+        if (waitingForAck) {
+            streamInfo.innerText = "Warning: timeout! Stopping stream.";
+            break;
+        }
+
+        if (transmissionDelay > 0) {
+            await new Promise(r => setTimeout(r, transmissionDelay));
+        }
+    }
+
+    streamInfo.innerText = "G-code file streamed successfully with dynamic configuration!";
+    progressBar.style.width = "100%";
 }
 
 function parseGLineDynamic(line) {
     const parts = line.trim().split(/\s+/);
-    let feedrate = 1200;
     const targetPositions = { ...axisPositions };
     let hasMovement = false;
 
@@ -635,53 +712,48 @@ function parseGLineDynamic(line) {
     const minSafeTime = (maxStepsInLine * highestMinDelayUs) / 1000000.0;
     timeSeconds = Math.max(minSafeTime, Math.min(timeSeconds, 5.0));
 
-    const payload = [Math.max(1, Math.round(timeSeconds * 1000))];
-    hardwareRegistry.forEach(ent => {
-        if (isAxisDeviceJS(ent.type)) payload.push(stepsMap[ent.name] || 0);
-    });
+    const timeMs = Math.max(1, Math.round(timeSeconds * 1000.0));
 
-        return payload.join(",");
+    const payload = [timeMs];
+    activeAxisNames.forEach(axisName => { payload.push(stepsMap[axisName] || 0); });
+
+    return payload.join(",");
 }
 
+// ==========================================
+// DETAILED INSTRUCTIONS FOR EACH DEVICE TYPE
+// ==========================================
+const DEVICE_INSTRUCTIONS = {
+    [DEVICE_AXIS]: `
+    <b>DEVICE_AXIS (Motion Motor & Endstop Control)</b><br>
+    • <b>Pins:</b> [0]: STEP | [1]: DIR | [2]: EN | [3]: ENDSTOP MIN (-1 if virtual/disabled) | [4]: ENDSTOP MAX (-1 if virtual/disabled)<br>
+    • <b>Params:</b> [0]: stepsPerUnit | [1]: maxLimit | [2]: minStepDelay | [3]: homingBackoffSteps | [4]: homingPostOffset | [5]: minInitialState | [6]: maxInitialState
+    `,
+    [DEVICE_PWM_SENSOR]: `
+    <b>DEVICE_PWM_SENSOR (Thermal, PID Control & Sensor Monitoring)</b><br>
+    • <b>Pins:</b> [0]: OUTPUT PWM Pin (-1 if pure sensor/virtual) | [1]: FEEDBACK ANALOG / SENSOR Pin (-1 if unused)<br>
+    • <b>Params:</b> [0]: Setpoint | [1]: Current Value | [2,3,4]: Kp, Ki, Kd | [5,6,7]: NTC (Resistor, Nominal, Beta) | [8]: Sensor Type (1-6) | [9]: usPerRead | [10]: sampleCount
+    `,
+    [DEVICE_GPIO]: `
+    <b>DEVICE_GPIO (Universal GPIO Configuration)</b><br>
+    • <b>Pins:</b> [0]: Target MCU Pin Number<br>
+    • <b>Params:</b> [0]: Mode (1.0 = Output, 0.0 = Input Pullup) | [1]: Initial State (0=LOW, 1=HIGH) | [2]: Pull Mode (0:Up, 1:Down, 2:Floating) | [3]: Active Level (0:Low, 1:High) | [4]: Debounce (ms)
+    `,
+    [DEVICE_PIPELINE]: `
+    <b>DEVICE_PIPELINE (Logic Interlock & Automation Pipeline)</b><br>
+    • <b>IF-ELSE Mode - Pins:</b> [0]: Source Index, [1]: Target Index | <b>Params:</b> [0]: Min Threshold, [1]: Max Threshold, [2]: Val True, [3]: Val False<br>
+    • <b>FMA Mode - Pins:</b> [0,1,2]: Source Indices (or -1 for constant), [3]: Target Index | <b>Params:</b> [0,1,2]: Constant A, B, C
+    `
+};
 
 // ============================================================================
-// 6. UI TAB SWITCHING & VISUAL CONFIGURATOR CARDS
+// 6. UI TAB SWITCHING & CONFIG CARDS
 // ============================================================================
 function switchTab(tabId, btnElement) {
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     document.getElementById(tabId).classList.add('active');
     btnElement.classList.add('active');
-}
-
-function getEntityFieldLabels(type) {
-    switch (type) {
-        case DEVICE_AXIS:
-            return {
-                pins: "Pins (Step, Dir, En, MinEndstop, MaxEndstop)",
-                params: "Params (Steps/Unit, MaxLimit, StepDelay, HomeBackoff, HomeOffset)"
-            };
-        case DEVICE_PWM_SENSOR:
-            return {
-                pins: "Pins (PWM_Out, Sensor_In)",
-                params: "Params (Target, Current, Kp, Ki, Kd, Resistor, Nominal, Beta, SensorType, Delay, Samples)"
-            };
-        case DEVICE_GPIO:
-            return {
-                pins: "Pins (TargetPin)",
-                params: "Params (Mode:1=Out/0=In, InitialState, PullMode, ActiveLevel, DebounceMs)"
-            };
-        case DEVICE_PIPELINE:
-            return {
-                pins: "Pins (2 Pins: Src, Tgt | 4 Pins FMA: A, B, C, Tgt)",
-                params: "Params (Standard: MinTrig, MaxTrig, TrueVal, FalseVal | FMA: ConstA, B, C..., Min, Max, True, False)"
-            };
-        default:
-            return {
-                pins: "Pins (Pin 0, Pin 1...)",
-                params: "Params (Param 0, Param 1...)"
-            };
-    }
 }
 
 function renderVisualConfigCards() {
@@ -691,19 +763,20 @@ function renderVisualConfigCards() {
     container.innerHTML = "";
     hardwareRegistry.forEach((ent, index) => {
         const card = document.createElement('div');
-        card.style.cssText = "background: #1e1e2e; border: 1px solid #313244; border-radius: 10px; padding: 15px; margin-bottom: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.2);";
+        card.style.cssText = "background: var(--bg-color); border: 1px solid var(--overlay-color); border-radius: 10px; padding: 15px; margin-bottom: 15px;";
 
-        const labels = getEntityFieldLabels(ent.type);
+        // Get instruction corresponding to current device type
+        const instructionHTML = DEVICE_INSTRUCTIONS[ent.type] || "<i>No instructions available for this device type.</i>";
 
         card.innerHTML = `
         <div style="display: grid; grid-template-columns: 2fr 2fr 100px; gap: 10px; align-items: center; margin-bottom: 12px;">
         <div>
         <label style="font-size: 11px; color: #a6adc8; display: block; margin-bottom: 3px;">Device Name</label>
-        <input type="text" id="ent_name_${index}" value="${ent.name}" style="width: 100%; padding: 8px; background: #11111b; border: 1px solid #45475a; color: #cdd6f4; border-radius: 6px; box-sizing: border-box;" onchange="updateEntityFromUI(${index})">
+        <input type="text" id="ent_name_${index}" value="${ent.name}" style="width: 100%; padding: 8px; background: var(--surface-color); border: 1px solid var(--overlay-color); color: var(--text-color); border-radius: 6px; box-sizing: border-box;" onchange="updateEntityFromUI(${index})">
         </div>
         <div>
         <label style="font-size: 11px; color: #a6adc8; display: block; margin-bottom: 3px;">Device Type</label>
-        <select id="ent_type_${index}" style="width: 100%; padding: 8px; background: #11111b; border: 1px solid #45475a; color: #cdd6f4; border-radius: 6px; box-sizing: border-box;" onchange="updateEntityFromUI(${index})">
+        <select id="ent_type_${index}" style="width: 100%; padding: 8px; background: var(--surface-color); border: 1px solid var(--overlay-color); color: var(--text-color); border-radius: 6px; box-sizing: border-box;" onchange="updateEntityFromUI(${index})">
         <option value="${DEVICE_AXIS}" ${ent.type === DEVICE_AXIS ? 'selected' : ''}>Axis (Motor)</option>
         <option value="${DEVICE_PWM_SENSOR}" ${ent.type === DEVICE_PWM_SENSOR ? 'selected' : ''}>Sensor / PWM</option>
         <option value="${DEVICE_GPIO}" ${ent.type === DEVICE_GPIO ? 'selected' : ''}>GPIO (Universal)</option>
@@ -711,18 +784,22 @@ function renderVisualConfigCards() {
         </select>
         </div>
         <div style="text-align: right; padding-top: 15px;">
-        <button onclick="removeHardwareEntity(${index})" style="padding: 8px 12px; background: #f38ba8; color: #11111b; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; transition: opacity 0.2s;" title="Delete Entity">🗑️ Delete</button>
+        <button onclick="removeHardwareEntity(${index})" class="btn-danger" style="padding: 8px 12px; width:auto; margin:0;" title="Delete Entity">🗑️</button>
         </div>
         </div>
 
         <div style="margin-bottom: 10px;">
-        <label id="label_pins_${index}" style="font-size: 11px; color: #89b4fa; display: block; margin-bottom: 3px; font-weight: bold;">${labels.pins}</label>
-        <input type="text" id="ent_pins_${index}" value="${ent.pins?.join(", ") || ""}" style="width: 100%; padding: 8px; background: #11111b; border: 1px solid #45475a; color: #cdd6f4; border-radius: 6px; box-sizing: border-box; font-family: monospace;" onchange="updateEntityFromUI(${index})">
+        <label style="font-size: 11px; color: var(--blue); display: block; margin-bottom: 3px; font-weight: bold;">Pins (Comma separated)</label>
+        <input type="text" id="ent_pins_${index}" value="${ent.pins?.join(", ") || ""}" style="width: 100%; padding: 8px; background: var(--surface-color); border: 1px solid var(--overlay-color); color: var(--text-color); border-radius: 6px; box-sizing: border-box; font-family: monospace;" onchange="updateEntityFromUI(${index})">
         </div>
 
-        <div>
-        <label id="label_params_${index}" style="font-size: 11px; color: #fab387; display: block; margin-bottom: 3px; font-weight: bold;">${labels.params}</label>
-        <input type="text" id="ent_params_${index}" value="${ent.params?.join(", ") || ""}" style="width: 100%; padding: 8px; background: #11111b; border: 1px solid #45475a; color: #cdd6f4; border-radius: 6px; box-sizing: border-box; font-family: monospace;" onchange="updateEntityFromUI(${index})">
+        <div style="margin-bottom: 10px;">
+        <label style="font-size: 11px; color: var(--peach); display: block; margin-bottom: 3px; font-weight: bold;">Params (Comma separated)</label>
+        <input type="text" id="ent_params_${index}" value="${ent.params?.join(", ") || ""}" style="width: 100%; padding: 8px; background: var(--surface-color); border: 1px solid var(--overlay-color); color: var(--text-color); border-radius: 6px; box-sizing: border-box; font-family: monospace;" onchange="updateEntityFromUI(${index})">
+        </div>
+
+        <div id="ent_help_${index}" style="background: rgba(137, 180, 250, 0.05); border-left: 3px solid var(--blue); padding: 8px 12px; border-radius: 4px; font-size: 11px; color: #a6adc8; line-height: 1.4;">
+        ${instructionHTML}
         </div>
         `;
         container.appendChild(card);
@@ -730,27 +807,20 @@ function renderVisualConfigCards() {
 }
 
 function updateEntityFromUI(index) {
-    const newType = parseInt(document.getElementById(`ent_type_${index}`).value);
-
     hardwareRegistry[index] = {
         name: document.getElementById(`ent_name_${index}`).value,
-        type: newType,
+        type: parseInt(document.getElementById(`ent_type_${index}`).value),
         pins: document.getElementById(`ent_pins_${index}`).value.split(',').map(v => parseInt(v.trim())).filter(v => !isNaN(v)),
         params: document.getElementById(`ent_params_${index}`).value.split(',').map(v => parseFloat(v.trim())).filter(v => !isNaN(v))
     };
 
+    // Refresh cards to update the help box instantly when device type changes
     renderVisualConfigCards();
     syncRegistryState();
 }
 
-
 function addNewHardwareEntity() {
-    hardwareRegistry.push({
-        name: "NEW_DEVICE",
-        type: DEVICE_PWM_SENSOR,
-        pins: [-1],
-        params: [-1]
-    });
+    hardwareRegistry.push({ name: "NEW_DEVICE", type: DEVICE_PWM_SENSOR, pins: [-1], params: [-1] });
     syncRegistryState();
 }
 
@@ -764,7 +834,7 @@ function saveDynamicRegistryVisual() {
     if (ws.readyState === WebSocket.OPEN) {
         ws.send("SAVE_CONFIG_JSON," + JSON.stringify(hardwareRegistry));
         if (msgEl) {
-            msgEl.style.color = "#fab387";
+            msgEl.style.color = "var(--blue)";
             msgEl.innerText = "⏳ Sending visual configuration (Runtime RAM)...";
         }
     } else {
@@ -772,89 +842,46 @@ function saveDynamicRegistryVisual() {
     }
 }
 
-function updateGpioStateUI(entityName, state) {
-    const statusBadge = document.getElementById(`gpio_status_${entityName}`);
-    if (statusBadge) {
-        if (state === 1 || state === "1" || state === true) {
-            statusBadge.innerText = "ON (HIGH)";
-            statusBadge.style.background = "#a6e3a1";
-            statusBadge.style.color = "#11111b";
-        } else {
-            statusBadge.innerText = "OFF (LOW)";
-            statusBadge.style.background = "#f38ba8";
-            statusBadge.style.color = "#11111b";
-        }
-    }
+/* ============================================================================
+ * REAL-TIME SYSTEM CLOCK
+ * ============================================================================ */
+let sessionStartTime = Date.now();
+let sessionTimerInterval = null;
+
+function initSystemClock() {
+    const clockEl = document.getElementById('sysClock');
+    if (!clockEl) return;
+
+    const updateClock = () => {
+        const now = new Date();
+        clockEl.innerText = now.toTimeString().split(' ')[0];
+    };
+
+    updateClock();
+    setInterval(updateClock, 1000);
 }
 
-function toggleGpioState(entityName) {
-    const statusBadge = document.getElementById(`gpio_status_${entityName}`);
-    let targetState = 1;
+function startSessionTimer() {
+    sessionStartTime = Date.now();
+    if (sessionTimerInterval) clearInterval(sessionTimerInterval);
 
-    if (statusBadge) {
-        const currentText = statusBadge.innerText;
-        if (currentText.includes("ON")) {
-            targetState = 0;
-        } else {
-            targetState = 1;
-        }
-    }
+    const timerEl = document.getElementById('sessionTimer');
+    if (!timerEl) return;
 
-    if (ws.readyState === WebSocket.OPEN) {
-        ws.send(`GPIO,${entityName},${targetState}`);
-    } else {
-        alert("Lost WebSocket connection!");
-    }
+    const updateTimer = () => {
+        const elapsedSec = Math.floor((Date.now() - sessionStartTime) / 1000);
+        const hrs = String(Math.floor(elapsedSec / 3600)).padStart(2, '0');
+        const mins = String(Math.floor((elapsedSec % 3600) / 60)).padStart(2, '0');
+        const secs = String(elapsedSec % 60).padStart(2, '0');
+
+        timerEl.innerText = `${hrs}:${mins}:${secs}`;
+    };
+
+    updateTimer();
+    sessionTimerInterval = setInterval(updateTimer, 1000);
 }
 
-// ============================================================================
-// SYSTEM DASHBOARD UI (CPU LOAD & FREE RAM BARS)
-// ============================================================================
-function updateSystemDashboardUI(loopTimeUs, freeHeap, totalHeap) {
-    const loopMs = (loopTimeUs / 1000.0).toFixed(2);
-
-    const cpuLoadPercent = Math.min(Math.max((loopTimeUs / 5000.0) * 100, 0), 100);
-    const ramFreePercent = Math.min(Math.max((freeHeap / totalHeap) * 100, 0), 100);
-    const freeKb = (freeHeap / 1024).toFixed(1);
-    const totalKb = (totalHeap / 1024).toFixed(1);
-
-    let cpuColor = "#a6e3a1";
-    if (cpuLoadPercent >= 80) cpuColor = "#f38ba8";
-    else if (cpuLoadPercent >= 25) cpuColor = "#fab387";
-
-    let ramColor = "#a6e3a1";
-    if (ramFreePercent <= 25) ramColor = "#f38ba8";
-    else if (ramFreePercent <= 50) ramColor = "#fab387";
-
-    let dashContainer = document.getElementById('systemDashboardContainer');
-    if (!dashContainer) {
-        dashContainer = document.createElement('div');
-        dashContainer.id = 'systemDashboardContainer';
-        dashContainer.style.cssText = "margin: 15px 0; padding: 12px; background: #181825; border-radius: 8px; border: 1px solid #313244;";
-
-        const targetParent = document.getElementById('streamInfo') || document.body;
-        targetParent.parentNode.insertBefore(dashContainer, targetParent.nextSibling);
-    }
-
-    dashContainer.innerHTML = `
-    <div style="font-weight: bold; color: #89b4fa; margin-bottom: 8px; font-size: 13px;">🖥️ MCU System Dashboard</div>
-    <div style="margin-bottom: 8px;">
-    <div style="display: flex; justify-content: space-between; font-size: 11px; color: #cdd6f4; margin-bottom: 3px;">
-    <span>⚡ System Load (Loop Time):</span>
-    <strong>${loopMs} ms (${cpuLoadPercent.toFixed(1)}%)</strong>
-    </div>
-    <div style="width: 100%; background: #313244; border-radius: 4px; overflow: hidden; height: 8px;">
-    <div style="width: ${cpuLoadPercent}%; background: ${cpuColor}; height: 100%; transition: width 0.2s ease;"></div>
-    </div>
-    </div>
-    <div>
-    <div style="display: flex; justify-content: space-between; font-size: 11px; color: #cdd6f4; margin-bottom: 3px;">
-    <span>💾 Free RAM:</span>
-    <strong>${freeKb} KB / ${totalKb} KB (${ramFreePercent.toFixed(1)}%)</strong>
-    </div>
-    <div style="width: 100%; background: #313244; border-radius: 4px; overflow: hidden; height: 8px;">
-    <div style="width: ${ramFreePercent}%; background: ${ramColor}; height: 100%; transition: width 0.2s ease;"></div>
-    </div>
-    </div>
-    `;
-}
+document.addEventListener("DOMContentLoaded", () => {
+    initSystemClock();
+    startSessionTimer();
+});

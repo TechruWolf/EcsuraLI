@@ -6,8 +6,8 @@
 #include<module/ECSContext.h>
 #include "module/HardwareConfig.h"
 #include<module/AnalogReader.h>
-#include<module/NetworkHandlers.h>
 #include<module/Motion.h>
+#include<module/NetworkHandlers.h>
 #include<module/Tasks.h>
 
 void setup() {

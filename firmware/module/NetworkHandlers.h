@@ -129,6 +129,7 @@ void handleSaveConfig(AsyncWebSocketClient *client, const char* jsonPayload) {
     }
 
     portENTER_CRITICAL(&ecsMux);
+    motionPipeline.clear();
     motionPipeline.init(detectedAxes);
     portEXIT_CRITICAL(&ecsMux);
 
@@ -181,42 +182,69 @@ void handleHome(AsyncWebSocketClient *client, char* payload) {
     char targetAxis[20];
     if (sscanf(payload, "%19s", targetAxis) != 1) return;
 
-    std::vector<int> axisIndices;
+    struct HomingTargetInfo {
+        size_t globalIndex;
+        size_t pipelineAxisIdx;
+        float homePriority;
+    };
+
+    std::vector<HomingTargetInfo> homingList;
+    bool isAll = (strcmp(targetAxis, "ALL") == 0);
+
     portENTER_CRITICAL(&hardwareMux);
+
+    size_t pipelineAxisIdx = 0;
     for (size_t i = 0; i < hardwareEntities.size(); i++) {
-        if (isAxisDevice(hardwareEntities[i].type)) axisIndices.push_back(i);
+        const auto& ent = hardwareEntities[i];
+        if (isAxisDevice(ent.type)) {
+            bool shouldHome = isAll || ent.name.equalsIgnoreCase(targetAxis);
+            if (shouldHome) {
+                int8_t minPin = (ent.pins.size() > 3) ? ent.pins[3] : -1;
+                if (minPin != -1) {
+                    float priority = (ent.params.size() > 3) ? ent.params[3] : 0.0f;
+                    homingList.push_back({i, pipelineAxisIdx, priority});
+                }
+            }
+            pipelineAxisIdx++;
+        }
     }
+
+    size_t totalAxesCount = 0;
+    for (const auto& ent : hardwareEntities) {
+        if (isAxisDevice(ent.type)) totalAxesCount++;
+    }
+
     portEXIT_CRITICAL(&hardwareMux);
 
-    if (axisIndices.empty()) {
-        client->text("ERR_NO_AXIS");
+    if (homingList.empty()) {
+        client->text("ERR_HOME");
         return;
     }
 
-    bool isAll = (strcmp(targetAxis, "ALL") == 0);
-    bool found = false;
-    std::vector<int32_t> homingSteps(axisIndices.size(), 0);
+    std::sort(homingList.begin(), homingList.end(), [](const HomingTargetInfo& a, const HomingTargetInfo& b) {
+        return a.homePriority > b.homePriority;
+    });
 
-    portENTER_CRITICAL(&hardwareMux);
-    for (size_t i = 0; i < axisIndices.size(); i++) {
-        const auto& ent = hardwareEntities[axisIndices[i]];
-        if (isAll || ent.name.equalsIgnoreCase(targetAxis)) {
-            int8_t minPin = (ent.pins.size() > 3) ? ent.pins[3] : -1;
-            if (minPin != -1) {
-                homingSteps[i] = -1;
-                found = true;
-            }
+    portENTER_CRITICAL(&ecsMux);
+    bool allPushed = true;
+
+    for (const auto& item : homingList) {
+        std::vector<int32_t> singleAxisSteps(totalAxesCount, 0);
+        singleAxisSteps[item.pipelineAxisIdx] = -1;
+
+        if (motionPipeline.isFull()) {
+            allPushed = false;
+            break;
         }
+        motionPipeline.push(50000, singleAxisSteps);
     }
-    portEXIT_CRITICAL(&hardwareMux);
 
-    if (found) {
-        portENTER_CRITICAL(&ecsMux);
-        motionPipeline.push(50000, homingSteps);
-        portEXIT_CRITICAL(&ecsMux);
+    portEXIT_CRITICAL(&ecsMux);
+
+    if (allPushed) {
         client->text("HACK");
     } else {
-        client->text("ERR_HOME");
+        client->text("ERR_BUFFER_FULL");
     }
 }
 
@@ -291,7 +319,7 @@ void handleDwell(AsyncWebSocketClient *client, char* payload) {
 void handleMotionPush(AsyncWebSocketClient *client, char* buffer) {
     char* token = strtok(buffer, ",");
     if (token == NULL) {
-        client->text("ERR_GCODE");
+        client->text("{\"status\":\"ERR_GCODE\"}");
         return;
     }
 
@@ -306,15 +334,22 @@ void handleMotionPush(AsyncWebSocketClient *client, char* buffer) {
         portENTER_CRITICAL(&ecsMux);
         bool success = motionPipeline.push(t, stepsList);
         size_t current_count = motionPipeline.count();
+        size_t h = motionPipeline.head;
+        size_t tl = motionPipeline.tail;
         portEXIT_CRITICAL(&ecsMux);
 
-        if (!success || current_count > 800) {
-            client->text("BUF_FULL");
-        } else {
-            client->text("ACK");
-        }
+        bool is_warning = !success || (current_count > MOTION_BUFFER_SIZE - 64);
+        const char* statusStr = is_warning ? "BUF_FULL" : "ACK";
+
+        String json = "{\"status\":\"" + String(statusStr) +
+        "\", \"head\":" + String(h) +
+        ", \"tail\":" + String(tl) +
+        ", \"count\":" + String(current_count) +
+        ", \"size\":" + String(MOTION_BUFFER_SIZE) + "}";
+        client->text(json);
+
     } else {
-        client->text("ERR_GCODE");
+        client->text("{\"status\":\"ERR_GCODE\"}");
     }
 }
 
