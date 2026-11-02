@@ -11,8 +11,9 @@
 #define SYS_ENTER_CRITICAL()  portENTER_CRITICAL(&hardwareMux)
 #define SYS_EXIT_CRITICAL()   portEXIT_CRITICAL(&hardwareMux)
 #define MOTION_BUFFER_SIZE    1000
-#define LUT_SIZE              64
-#define LOOK_AHEAD_COUNT      16
+#define LUT_SIZE              128
+#define LOOK_AHEAD_COUNT      32
+#define VREF                  3.3f
 #define SYS_TASK_CREATE(task, name, stack, params, priority, handle, core) \
 xTaskCreatePinnedToCore(task, name, stack, params, priority, handle, core)
 
@@ -26,6 +27,7 @@ xTaskCreatePinnedToCore(task, name, stack, params, priority, handle, core)
 #define MOTION_BUFFER_SIZE    1000
 #define LUT_SIZE              64
 #define LOOK_AHEAD_COUNT      16
+#define VREF                  3.3f
 #define SYS_TASK_CREATE(task, name, stack, params, priority, handle, core) \
 xTaskCreate(task, name, stack, params, priority, handle)
 
@@ -39,6 +41,7 @@ xTaskCreate(task, name, stack, params, priority, handle)
 #define MOTION_BUFFER_SIZE    256
 #define LUT_SIZE              48
 #define LOOK_AHEAD_COUNT      8
+#define VREF                  3.3f
 #define SYS_TASK_CREATE(task, name, stack, params, priority, handle, core) \
 ((void)0)
 
@@ -51,7 +54,8 @@ xTaskCreate(task, name, stack, params, priority, handle)
 #define SYS_EXIT_CRITICAL()   portEXIT_CRITICAL()
 #define MOTION_BUFFER_SIZE    500
 #define LUT_SIZE              16
-#define LOOK_AHEAD_COUNT      2
+#define LOOK_AHEAD_COUNT      8
+#define VREF                  3.3f
 #define SYS_TASK_CREATE(task, name, stack, params, priority, handle, core) \
 xTaskCreate(task, name, stack, params, priority, handle)
 
@@ -64,7 +68,8 @@ xTaskCreate(task, name, stack, params, priority, handle)
 #define SYS_EXIT_CRITICAL()   interrupts()
 #define MOTION_BUFFER_SIZE    64
 #define LUT_SIZE              8
-#define LOOK_AHEAD_COUNT      1
+#define LOOK_AHEAD_COUNT      4
+#define VREF                  3.3f
 #define SYS_TASK_CREATE(task, name, stack, params, priority, handle, core) \
 ((void)0)
 #endif

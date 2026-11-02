@@ -5,10 +5,13 @@
 #include<module/HAL.h>
 #include<module/ECSContext.h>
 #include "module/HardwareConfig.h"
-#include<module/AnalogReader.h>
+#include<module/PWMAndSensor.h>
 #include<module/Motion.h>
+#include<module/GPIO.h>
 #include<module/NetworkHandlers.h>
+#include<module/Pipeline.h>
 #include<module/Tasks.h>
+#include<module/Init.h>
 
 void setup() {
     Serial.begin(115200);

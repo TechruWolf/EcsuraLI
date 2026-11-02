@@ -18,7 +18,7 @@ const bufferWarning = document.getElementById('bufferWarning');
 
 let waitingForAck = false;
 let transmissionDelay = 0;
-let MaxTransmissionDelay = 5000;
+let MaxTransmissionDelay = 2000;
 let hardwareRegistry = [];
 
 const DEVICE_AXIS = 0;
@@ -30,7 +30,7 @@ const DEVICE_VAR = 4;
 const isAxisDeviceJS = (type) => (type === DEVICE_AXIS);
 const isHomableAxisJS = (ent) => {
     if (ent.type !== DEVICE_AXIS) return false;
-    const minPin = (ent.pins && ent.pins.length > 3) ? ent.pins[3] : -1;
+    const minPin = (ent.params_int && ent.params_int.length > 3) ? ent.params_int[3] : -1;
     return minPin !== -1;
 };
 
@@ -62,6 +62,11 @@ function addBootLog(msg) {
     logContainer.scrollTop = logContainer.scrollHeight;
 }
 
+/**
+ * @brief Updates the boot progress bar, status text, and automatically dismisses the boot screen upon completion.
+ * @param stepVal Increment value added to the current boot progress.
+ * @param statusText Status message to display in the boot interface.
+ */
 function updateBootProgress(stepVal, statusText) {
     bootProgress = Math.min(100, bootProgress + stepVal);
     const bar = document.getElementById('bootProgressBar');
@@ -70,9 +75,12 @@ function updateBootProgress(stepVal, statusText) {
     if (txt) txt.innerText = statusText;
 
     if (bootProgress >= 100) {
-        if (txt) txt.innerText = "System initialization complete. Ready.";
-        const enterBtn = document.getElementById('enterAppBtn');
-        if (enterBtn) enterBtn.style.display = 'inline-block';
+        if (txt) txt.innerText = "System initialization complete. Entering application...";
+
+        // Automatically dismiss the boot screen after a short delay (e.g., 400ms) for a smooth transition
+        setTimeout(() => {
+            dismissBootScreen();
+        }, 400);
     }
 }
 
@@ -176,7 +184,7 @@ ws.onmessage = (event) => {
 
         hardwareRegistry.forEach((ent, index) => {
             if (ent.type === DEVICE_VAR) {
-                const varMode = (ent.pins && ent.pins.length > 0) ? ent.pins[0] : 0;
+                const varMode = (ent.params_int && ent.params_int.length > 0) ? ent.params_int[0] : 0;
 
                 if (parts[partIdx] !== undefined) {
                     const val = parseFloat(parts[partIdx]);
@@ -224,7 +232,7 @@ ws.onmessage = (event) => {
             const res = JSON.parse(msg);
             if (res.status === "ACK") {
                 waitingForAck = false;
-                if (transmissionDelay > 0) transmissionDelay = Math.max(0, transmissionDelay - 2);
+                //if (transmissionDelay > 0) transmissionDelay = Math.max(0, transmissionDelay - 2);
                 if (transmissionDelay === 0) bufferWarning.innerText = "";
             }
             else if (res.status === "BUF_FULL") {
@@ -245,6 +253,7 @@ ws.onmessage = (event) => {
                 let bar = document.getElementById('bufProgressBar');
                 bar.style.width = percent + "%";
                 bar.style.backgroundColor = percent > 85 ? "var(--red)" : (percent > 50 ? "var(--peach)" : "var(--green)");
+                if (percent <= 85) transmissionDelay = 0;
             }
         } catch (e) {
             console.error("Failed to parse JSON status message:", e);
@@ -316,9 +325,9 @@ function buildDynamicUI() {
         let tempHtml = '<span style="font-weight:bold; color:var(--blue); font-size:13px;">🔥 Sensors & PWM Control</span>';
         hardwareRegistry.forEach(ent => {
             if (ent.type === DEVICE_PWM_SENSOR) {
-                const hasPWMOut = (ent.pins && ent.pins.length > 0 && ent.pins[0] !== -1);
-                const currentTarget = ent.params?.[0] || 0;
-                const meta = getSensorMeta((ent.params && ent.params.length > 8) ? ent.params[8] : 1);
+                const hasPWMOut = (ent.params_int && ent.params_int.length > 0 && ent.params_int[0] !== -1);
+                const currentTarget = ent.params_float?.[0] || 0;
+                const meta = getSensorMeta((ent.params_float && ent.params_float.length > 8) ? ent.params_float[8] : 1);
                 const controlHtml = hasPWMOut ? `<input type="number" id="input_${ent.name}" value="${currentTarget}" step="1" style="width: 70px; padding: 4px; background: var(--bg-color); border: 1px solid var(--overlay-color); color: var(--text-color); border-radius: 4px;"> <button onclick="sendIndividualTemp('${ent.name}')" style="padding: 4px 10px; background: var(--blue); color: var(--bg-color); border: none; border-radius: 4px; width:auto;">Set</button>` : '';
 
                 tempHtml += `<div style="margin: 6px 0; padding: 8px; background: var(--bg-color); border-radius: 6px; border: 1px solid var(--overlay-color); display: flex; align-items: center; justify-content: space-between;">
@@ -349,7 +358,7 @@ function buildDynamicUI() {
         hardwareRegistry.forEach(ent => {
             if (ent.type === DEVICE_GPIO) {
                 hasGpio = true;
-                const isOutput = ent.params?.[0] === 1;
+                const isOutput = ent.params_float?.[0] === 1;
                 const btn = isOutput ? `<button onclick="toggleGpioState('${ent.name}')" style="width: 70px; margin-top:0; padding:4px; background: var(--overlay-color); color: var(--text-color);" id="gpio_btn_${ent.name}">Toggle</button>` : '';
                 gpioHtml += `<div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg-color); padding: 8px; border-radius: 6px; border: 1px solid var(--overlay-color); margin-top:6px;">
                 <span>${ent.name} <span id="gpio_status_${ent.name}" style="font-size:11px; color:var(--green);">(READING)</span></span>
@@ -380,17 +389,17 @@ function buildDynamicUI() {
         hardwareRegistry.forEach(ent => {
             if (ent.type === DEVICE_PIPELINE) {
                 hasPipeline = true;
-                const pins = ent.pins || [];
-                const params = ent.params || [];
-                const isFMA = pins.length >= 4;
+                const params_int = ent.params_int || [];
+                const params_float = ent.params_float || [];
+                const isFMA = params_int.length >= 4;
 
                 let detailsHtml = '';
 
                 if (isFMA) {
-                    const idxA = pins[0];
-                    const idxB = pins[1];
-                    const idxC = pins[2];
-                    const tgtIdx = pins[3];
+                    const idxA = params_int[0];
+                    const idxB = params_int[1];
+                    const idxC = params_int[2];
+                    const tgtIdx = params_int[3];
 
                     const getSourceDesc = (idx, paramVal, defaultVal) => {
                         if (idx >= 0 && hardwareRegistry[idx]) {
@@ -401,9 +410,9 @@ function buildDynamicUI() {
                         }
                     };
 
-                    const descA = getSourceDesc(idxA, params[0], 0.0);
-                    const descB = getSourceDesc(idxB, params[1], 1.0);
-                    const descC = getSourceDesc(idxC, params[2], 0.0);
+                    const descA = getSourceDesc(idxA, params_float[0], 0.0);
+                    const descB = getSourceDesc(idxB, params_float[1], 1.0);
+                    const descC = getSourceDesc(idxC, params_float[2], 0.0);
                     const tgtName = (tgtIdx >= 0 && hardwareRegistry[tgtIdx]) ? hardwareRegistry[tgtIdx].name : `Index ${tgtIdx}`;
 
                     detailsHtml = `
@@ -416,16 +425,16 @@ function buildDynamicUI() {
                     <div>Target Device: <strong style="color: var(--green);">${tgtName}</strong></div>
                     `;
                 } else {
-                    const srcIdx = pins[0] ?? -1;
-                    const tgtIdx = pins[1] ?? -1;
+                    const srcIdx = params_int[0] ?? -1;
+                    const tgtIdx = params_int[1] ?? -1;
 
                     const srcName = (srcIdx >= 0 && hardwareRegistry[srcIdx]) ? hardwareRegistry[srcIdx].name : `Index ${srcIdx}`;
                     const tgtName = (tgtIdx >= 0 && hardwareRegistry[tgtIdx]) ? hardwareRegistry[tgtIdx].name : `Index ${tgtIdx}`;
 
-                    const minTrig = params[0] !== undefined ? params[0] : 'N/A';
-                    const maxTrig = params[1] !== undefined ? params[1] : 'N/A';
-                    const valTrue = params[2] !== undefined ? params[2] : 'Direct Source';
-                    const valFalse = params[3] !== undefined ? params[3] : 'Ignored/Pass';
+                    const minTrig = params_float[0] !== undefined ? params_float[0] : 'N/A';
+                    const maxTrig = params_float[1] !== undefined ? params_float[1] : 'N/A';
+                    const valTrue = params_float[2] !== undefined ? params_float[2] : 'Direct Source';
+                    const valFalse = params_float[3] !== undefined ? params_float[3] : 'Ignored/Pass';
 
                     detailsHtml = `
                     <div style="grid-column: span 2; background: var(--bg-color); padding: 6px; border-radius: 4px; margin-bottom: 5px; color: var(--blue); font-family: monospace;">
@@ -474,8 +483,8 @@ function buildDynamicUI() {
         hardwareRegistry.forEach((ent, index) => {
             if (ent.type === DEVICE_VAR) {
                 hasVar = true;
-                const varMode = (ent.pins && ent.pins.length > 0) ? ent.pins[0] : 0;
-                const currentValue = (ent.params && ent.params.length > 0) ? ent.params[0] : 0.0;
+                const varMode = (ent.params_int && ent.params_int.length > 0) ? ent.params_int[0] : 0;
+                const currentValue = (ent.params_float && ent.params_float.length > 0) ? ent.params_float[0] : 0.0;
 
                 let controlHtml = '';
                 if (varMode === 0) {
@@ -512,7 +521,7 @@ function jogAxisDynamic(axisName, direction) {
     const stepDist = parseFloat(document.getElementById('jogStep').value) * direction;
     const stepsArray = hardwareRegistry.filter(ent => isAxisDeviceJS(ent.type)).map(ent => {
         if (ent.name === axisName) {
-            const stepsPerUnit = (ent.params && ent.params[0] > 0) ? ent.params[0] : 80;
+            const stepsPerUnit = (ent.params_float && ent.params_float[0] > 0) ? ent.params_float[0] : 80;
             return Math.round(stepDist * stepsPerUnit);
         }
         return 0;
@@ -531,7 +540,7 @@ function sendIndividualTemp(entityName) {
 
 function turnOffAllPWM() {
     hardwareRegistry.forEach(ent => {
-        if (ent.type === DEVICE_PWM_SENSOR && ent.pins?.[0] !== -1) {
+        if (ent.type === DEVICE_PWM_SENSOR && ent.params_int?.[0] !== -1) {
             const inputEl = document.getElementById(`input_${ent.name}`);
             if (inputEl) inputEl.value = 0;
             if (ws.readyState === WebSocket.OPEN) ws.send(`SET_PWM,${ent.name},0`);
@@ -567,13 +576,13 @@ function sendVarValue(index) {
     const newVal = parseFloat(valInput.value);
     if (isNaN(newVal)) return;
 
-    if (!hardwareRegistry[index].params) hardwareRegistry[index].params = [];
-    hardwareRegistry[index].params[0] = newVal;
+    if (!hardwareRegistry[index].params_float) hardwareRegistry[index].params_float = [];
+    hardwareRegistry[index].params_float[0] = newVal;
 
     const payload = {
         action: "update_entity",
         index: index,
-        params: hardwareRegistry[index].params
+        params_float: hardwareRegistry[index].params_float
     };
 
     if (window.ws && ws.readyState === WebSocket.OPEN) {
@@ -582,13 +591,13 @@ function sendVarValue(index) {
 }
 
 function changeVarMode(index, newMode) {
-    if (!hardwareRegistry[index].pins) hardwareRegistry[index].pins = [0];
-    hardwareRegistry[index].pins[0] = parseInt(newMode);
+    if (!hardwareRegistry[index].params_int) hardwareRegistry[index].params_int = [0];
+    hardwareRegistry[index].params_int[0] = parseInt(newMode);
 
     const payload = {
         action: "update_entity",
         index: index,
-        pins: hardwareRegistry[index].pins
+        params_int: hardwareRegistry[index].params_int
     };
 
     if (window.ws && ws.readyState === WebSocket.OPEN) {
@@ -798,7 +807,7 @@ function parseGLineDynamic(line) {
         if (isAxisDeviceJS(ent.type)) {
             const name = ent.name;
             const dPos = (targetPositions[name] !== undefined ? targetPositions[name] : axisPositions[name]) - (axisPositions[name] || 0);
-            const stepsPerUnit = (ent.params && ent.params[0] > 0) ? ent.params[0] : 80;
+            const stepsPerUnit = (ent.params_float && ent.params_float[0] > 0) ? ent.params_float[0] : 80;
             const steps = Math.round(dPos * stepsPerUnit);
 
             stepsMap[name] = steps;
@@ -807,7 +816,7 @@ function parseGLineDynamic(line) {
             const absSteps = Math.abs(steps);
             if (absSteps > maxStepsInLine) maxStepsInLine = absSteps;
 
-            const minDelay = (ent.params && ent.params.length > 2) ? ent.params[2] : 2.0;
+            const minDelay = (ent.params_float && ent.params_float.length > 2) ? ent.params_float[2] : 2.0;
             if (minDelay > highestMinDelayUs) highestMinDelayUs = minDelay;
         }
     });
@@ -911,12 +920,12 @@ function renderVisualConfigCards() {
 
         <div style="margin-bottom: 10px;">
         <label style="font-size: 11px; color: var(--blue); display: block; margin-bottom: 3px; font-weight: bold;">Pins (Comma separated)</label>
-        <input type="text" id="ent_pins_${index}" value="${ent.pins?.join(", ") || ""}" style="width: 100%; padding: 8px; background: var(--surface-color); border: 1px solid var(--overlay-color); color: var(--text-color); border-radius: 6px; box-sizing: border-box; font-family: monospace;" onchange="updateEntityFromUI(${index})">
+        <input type="text" id="ent_params_int_${index}" value="${ent.params_int?.join(", ") || ""}" style="width: 100%; padding: 8px; background: var(--surface-color); border: 1px solid var(--overlay-color); color: var(--text-color); border-radius: 6px; box-sizing: border-box; font-family: monospace;" onchange="updateEntityFromUI(${index})">
         </div>
 
         <div style="margin-bottom: 10px;">
         <label style="font-size: 11px; color: var(--peach); display: block; margin-bottom: 3px; font-weight: bold;">Params (Comma separated)</label>
-        <input type="text" id="ent_params_${index}" value="${ent.params?.join(", ") || ""}" style="width: 100%; padding: 8px; background: var(--surface-color); border: 1px solid var(--overlay-color); color: var(--text-color); border-radius: 6px; box-sizing: border-box; font-family: monospace;" onchange="updateEntityFromUI(${index})">
+        <input type="text" id="ent_params_float_${index}" value="${ent.params_float?.join(", ") || ""}" style="width: 100%; padding: 8px; background: var(--surface-color); border: 1px solid var(--overlay-color); color: var(--text-color); border-radius: 6px; box-sizing: border-box; font-family: monospace;" onchange="updateEntityFromUI(${index})">
         </div>
 
         <div id="ent_help_${index}" style="background: rgba(137, 180, 250, 0.05); border-left: 3px solid var(--blue); padding: 8px 12px; border-radius: 4px; font-size: 11px; color: #a6adc8; line-height: 1.4;">
@@ -931,8 +940,8 @@ function updateEntityFromUI(index) {
     hardwareRegistry[index] = {
         name: document.getElementById(`ent_name_${index}`).value,
         type: parseInt(document.getElementById(`ent_type_${index}`).value),
-        pins: document.getElementById(`ent_pins_${index}`).value.split(',').map(v => parseInt(v.trim())).filter(v => !isNaN(v)),
-        params: document.getElementById(`ent_params_${index}`).value.split(',').map(v => parseFloat(v.trim())).filter(v => !isNaN(v))
+        params_int: document.getElementById(`ent_params_int_${index}`).value.split(',').map(v => parseInt(v.trim())).filter(v => !isNaN(v)),
+        params_float: document.getElementById(`ent_params_float_${index}`).value.split(',').map(v => parseFloat(v.trim())).filter(v => !isNaN(v))
     };
 
     // Refresh cards to update the help box instantly when device type changes
@@ -941,7 +950,7 @@ function updateEntityFromUI(index) {
 }
 
 function addNewHardwareEntity() {
-    hardwareRegistry.push({ name: "NEW_DEVICE", type: DEVICE_PWM_SENSOR, pins: [-1], params: [-1] });
+    hardwareRegistry.push({ name: "NEW_DEVICE", type: DEVICE_PWM_SENSOR, params_int: [-1], params_float: [-1] });
     syncRegistryState();
 }
 

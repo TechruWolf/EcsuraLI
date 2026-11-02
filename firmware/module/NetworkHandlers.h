@@ -6,6 +6,29 @@
 inline AsyncWebServer server(80);
 inline AsyncWebSocket ws("/ws");
 
+/**
+ * @brief Forward declarations of modular system handlers.
+ */
+
+// Required by Init.h
+void initHardwareECS();
+
+// Required by Motion.h
+void handleHome(AsyncWebSocketClient *client, char* payload);
+void handleMotionPush(AsyncWebSocketClient *client, char* buffer);
+void handleEmergencyStop(AsyncWebSocketClient *client);
+
+// Required by SensorAndPWM.h
+void handleSetPWM(AsyncWebSocketClient *client, char* payload);
+
+// Required by GPIO.h
+void handleGpio(AsyncWebSocketClient *client, char* payload);
+
+/**
+ * @brief Parses incoming JSON configuration payload and updates hardware entities safely.
+ * @param client Pointer to the active WebSocket client.
+ * @param jsonPayload Raw JSON character string containing configuration items.
+ */
 void handleSaveConfig(AsyncWebSocketClient *client, const char* jsonPayload) {
     std::vector<HardwareEntity> newEntities;
     int depth = 0;
@@ -27,7 +50,7 @@ void handleSaveConfig(AsyncWebSocketClient *client, const char* jsonPayload) {
                 std::vector<int8_t> entPins;
                 std::vector<float> entParams;
 
-                // Parse name
+                // Parse device name string
                 int nameIdx = objStr.indexOf("\"name\":\"");
                 if (nameIdx != -1) {
                     int startN = nameIdx + 8;
@@ -35,7 +58,7 @@ void handleSaveConfig(AsyncWebSocketClient *client, const char* jsonPayload) {
                     if (endN != -1) entName = objStr.substring(startN, endN);
                 }
 
-                // Parse type
+                // Parse device type integer/enum value
                 int typeIdx = objStr.indexOf("\"type\":");
                 if (typeIdx != -1) {
                     int startT = typeIdx + 7;
@@ -44,18 +67,18 @@ void handleSaveConfig(AsyncWebSocketClient *client, const char* jsonPayload) {
                     entType = (DeviceType)objStr.substring(startT, endT).toInt();
                 }
 
-                // Parse pins
-                int pinsIdx = objStr.indexOf("\"pins\":[");
-                if (pinsIdx != -1) {
-                    int startP = pinsIdx + 8;
+                // Parse integer parameters/pins array (params_int)
+                int params_intIdx = objStr.indexOf("\"params_int\":[");
+                if (params_intIdx != -1) {
+                    int startP = params_intIdx + 14;
                     int endP = objStr.indexOf("]", startP);
                     if (endP != -1) {
-                        String pinsStr = objStr.substring(startP, endP);
+                        String params_intStr = objStr.substring(startP, endP);
                         int pStart = 0;
-                        while (pStart < pinsStr.length()) {
-                            int pComma = pinsStr.indexOf(",", pStart);
-                            if (pComma == -1) pComma = pinsStr.length();
-                            String pVal = pinsStr.substring(pStart, pComma);
+                        while (pStart < params_intStr.length()) {
+                            int pComma = params_intStr.indexOf(",", pStart);
+                            if (pComma == -1) pComma = params_intStr.length();
+                            String pVal = params_intStr.substring(pStart, pComma);
                             pVal.trim();
                             if (pVal.length() > 0) entPins.push_back((int8_t)pVal.toInt());
                             pStart = pComma + 1;
@@ -63,18 +86,18 @@ void handleSaveConfig(AsyncWebSocketClient *client, const char* jsonPayload) {
                     }
                 }
 
-                // Parse params
-                int paramsIdx = objStr.indexOf("\"params\":[");
-                if (paramsIdx != -1) {
-                    int startPr = paramsIdx + 10;
+                // Parse floating-point parameters array (params_float)
+                int params_floatIdx = objStr.indexOf("\"params_float\":[");
+                if (params_floatIdx != -1) {
+                    int startPr = params_floatIdx + 16;
                     int endPr = objStr.indexOf("]", startPr);
                     if (endPr != -1) {
-                        String paramsStr = objStr.substring(startPr, endPr);
+                        String params_floatStr = objStr.substring(startPr, endPr);
                         int prStart = 0;
-                        while (prStart < paramsStr.length()) {
-                            int prComma = paramsStr.indexOf(",", prStart);
-                            if (prComma == -1) prComma = paramsStr.length();
-                            String prVal = paramsStr.substring(prStart, prComma);
+                        while (prStart < params_floatStr.length()) {
+                            int prComma = params_floatStr.indexOf(",", prStart);
+                            if (prComma == -1) prComma = params_floatStr.length();
+                            String prVal = params_floatStr.substring(prStart, prComma);
                             prVal.trim();
                             if (prVal.length() > 0) entParams.push_back(prVal.toFloat());
                             prStart = prComma + 1;
@@ -97,60 +120,31 @@ void handleSaveConfig(AsyncWebSocketClient *client, const char* jsonPayload) {
     hardwareEntities = newEntities;
     SYS_EXIT_CRITICAL();
 
-    for (const auto& ent : hardwareEntities) {
-        if (isAxisDevice(ent.type)) {
-            if (ent.pins.size() >= 3) {
-                pinMode(ent.pins[0], OUTPUT);
-                pinMode(ent.pins[1], OUTPUT);
-                pinMode(ent.pins[2], OUTPUT);
-                digitalWrite(ent.pins[2], LOW);
-            }
-            if (ent.pins.size() >= 4 && ent.pins[3] != -1) pinMode(ent.pins[3], INPUT_PULLUP);
-            if (ent.pins.size() >= 5 && ent.pins[4] != -1) pinMode(ent.pins[4], INPUT_PULLUP);
-        } else if (ent.type == DEVICE_PWM_SENSOR) {
-            if (ent.pins.size() >= 1) ledcAttach(ent.pins[0], 5000, 8);
-            if (ent.pins.size() >= 2) pinMode(ent.pins[1], INPUT);
-        } else if (ent.type == DEVICE_GPIO) {
-            if (ent.pins.size() >= 1) {
-                int isOutput = (ent.params.size() >= 1 && ent.params[0] == 1.0f) ? 1 : 0;
-                if (isOutput) {
-                    pinMode(ent.pins[0], OUTPUT);
-                    digitalWrite(ent.pins[0], LOW);
-                } else {
-                    pinMode(ent.pins[0], INPUT_PULLUP);
-                }
-            }
-        }
-    }
-
-    size_t detectedAxes = 0;
-    for (const auto& ent : hardwareEntities) {
-        if (isAxisDevice(ent.type)) detectedAxes++;
-    }
-
-    portENTER_CRITICAL(&ecsMux);
-    motionPipeline.clear();
-    motionPipeline.init(detectedAxes);
-    portEXIT_CRITICAL(&ecsMux);
+    // Reinitialize hardware subsystems with the updated configuration
+    initHardwareECS();
 
     client->text("SCA");
 }
 
+/**
+ * @brief Serializes current hardware entities into a structured JSON string response.
+ * @param client Pointer to the active WebSocket client.
+ */
 void handleGetConfig(AsyncWebSocketClient *client) {
     String responseJson = "CFG_RESP,[";
     SYS_ENTER_CRITICAL();
     for (size_t i = 0; i < hardwareEntities.size(); i++) {
         responseJson += "{\"name\":\"" + hardwareEntities[i].name + "\",";
         responseJson += "\"type\":" + String(hardwareEntities[i].type) + ",";
-        responseJson += "\"pins\":[";
-        for (size_t p = 0; p < hardwareEntities[i].pins.size(); p++) {
-            responseJson += String(hardwareEntities[i].pins[p]);
-            if (p + 1 < hardwareEntities[i].pins.size()) responseJson += ",";
+        responseJson += "\"params_int\":[";
+        for (size_t p = 0; p < hardwareEntities[i].params_int.size(); p++) {
+            responseJson += String(hardwareEntities[i].params_int[p]);
+            if (p + 1 < hardwareEntities[i].params_int.size()) responseJson += ",";
         }
-        responseJson += "],\"params\":[";
-        for (size_t pr = 0; pr < hardwareEntities[i].params.size(); pr++) {
-            responseJson += String(hardwareEntities[i].params[pr]);
-            if (pr + 1 < hardwareEntities[i].params.size()) responseJson += ",";
+        responseJson += "],\"params_float\":[";
+        for (size_t pr = 0; pr < hardwareEntities[i].params_float.size(); pr++) {
+            responseJson += String(hardwareEntities[i].params_float[pr]);
+            if (pr + 1 < hardwareEntities[i].params_float.size()) responseJson += ",";
         }
         responseJson += "]}";
         if (i + 1 < hardwareEntities.size()) responseJson += ",";
@@ -160,153 +154,21 @@ void handleGetConfig(AsyncWebSocketClient *client) {
     client->text(responseJson);
 }
 
-void handleSetPWM(AsyncWebSocketClient *client, char* payload) {
-    char deviceName[20];
-    float targetT = 0;
-    if (sscanf(payload, "%19[^,],%f", deviceName, &targetT) == 2) {
-        SYS_ENTER_CRITICAL();
-        for (auto& ent : hardwareEntities) {
-            if (ent.name == deviceName && ent.type == DEVICE_PWM_SENSOR && !ent.params.empty()) {
-                ent.params[0] = targetT;
-                SYS_EXIT_CRITICAL();
-                client->text("ACK");
-                return;
-            }
-        }
-        SYS_EXIT_CRITICAL();
-    }
-    client->text("ERR_DEV");
-}
-
-void handleHome(AsyncWebSocketClient *client, char* payload) {
-    char targetAxis[20];
-    if (sscanf(payload, "%19s", targetAxis) != 1) return;
-
-    struct HomingTargetInfo {
-        size_t globalIndex;
-        size_t pipelineAxisIdx;
-        float homePriority;
-    };
-
-    std::vector<HomingTargetInfo> homingList;
-    bool isAll = (strcmp(targetAxis, "ALL") == 0);
-
-    SYS_ENTER_CRITICAL();
-
-    size_t pipelineAxisIdx = 0;
-    for (size_t i = 0; i < hardwareEntities.size(); i++) {
-        const auto& ent = hardwareEntities[i];
-        if (isAxisDevice(ent.type)) {
-            bool shouldHome = isAll || ent.name.equalsIgnoreCase(targetAxis);
-            if (shouldHome) {
-                int8_t minPin = (ent.pins.size() > 3) ? ent.pins[3] : -1;
-                if (minPin != -1) {
-                    float priority = (ent.params.size() > 3) ? ent.params[3] : 0.0f;
-                    homingList.push_back({i, pipelineAxisIdx, priority});
-                }
-            }
-            pipelineAxisIdx++;
-        }
-    }
-
-    size_t totalAxesCount = 0;
-    for (const auto& ent : hardwareEntities) {
-        if (isAxisDevice(ent.type)) totalAxesCount++;
-    }
-
-    SYS_EXIT_CRITICAL();
-
-    if (homingList.empty()) {
-        client->text("ERR_HOME");
-        return;
-    }
-
-    std::sort(homingList.begin(), homingList.end(), [](const HomingTargetInfo& a, const HomingTargetInfo& b) {
-        return a.homePriority > b.homePriority;
-    });
-
-    portENTER_CRITICAL(&ecsMux);
-    bool allPushed = true;
-
-    for (const auto& item : homingList) {
-        std::vector<int32_t> singleAxisSteps(totalAxesCount, 0);
-        singleAxisSteps[item.pipelineAxisIdx] = -1;
-
-        if (motionPipeline.isFull()) {
-            allPushed = false;
-            break;
-        }
-        motionPipeline.push(50000, singleAxisSteps);
-    }
-
-    portEXIT_CRITICAL(&ecsMux);
-
-    if (allPushed) {
-        client->text("HACK");
-    } else {
-        client->text("ERR_BUFFER_FULL");
-    }
-}
-
-void handleGpio(AsyncWebSocketClient *client, char* payload) {
-    char deviceName[20];
-    int val = -1;
-    int scanned = sscanf(payload, "%19[^,],%d", deviceName, &val);
-
-    SYS_ENTER_CRITICAL();
-    bool found = false;
-    int8_t pin = -1;
-    float modeParam = 0;
-
-    for (auto& ent : hardwareEntities) {
-        if (ent.name == deviceName && ent.type == DEVICE_GPIO) {
-            if (!ent.pins.empty()) pin = ent.pins[0];
-            if (!ent.params.empty()) modeParam = ent.params[0];
-            if (modeParam == 1.0f && scanned == 2 && pin != -1) {
-                if (val > 1) {
-                    ledcAttach(pin, 25000, 8);
-                    ledcWrite(pin, constrain(val, 0, 255));
-                } else {
-                    digitalWrite(pin, val ? HIGH : LOW);
-                }
-                ent.runtimeState1 = val;
-            }
-            found = true;
-            break;
-        }
-    }
-    SYS_EXIT_CRITICAL();
-
-    if (!found || pin == -1) {
-        client->text("ERR_GPIO");
-        return;
-    }
-
-    int currentState = digitalRead(pin);
-    char resp[40];
-    snprintf(resp, sizeof(resp), "G_READ,%s,%d", deviceName, currentState);
-    client->text(resp);
-}
-
+/**
+ * @brief Immediately halts motion operations and disables all active outputs for emergency safety.
+ * @param client Pointer to the active WebSocket client.
+ */
 void handleEmergencyStop(AsyncWebSocketClient *client) {
-    portENTER_CRITICAL(&ecsMux);
-    motionPipeline.clear();
-    portEXIT_CRITICAL(&ecsMux);
-
-    SYS_ENTER_CRITICAL();
-    for (auto& ent : hardwareEntities) {
-        if (ent.type == DEVICE_PWM_SENSOR && !ent.params.empty()) {
-            ent.params[0] = 0.0f;
-            if (!ent.pins.empty()) ledcWrite(ent.pins[0], 0);
-        }
-        if (isAxisDevice(ent.type) && ent.pins.size() >= 3) {
-            digitalWrite(ent.pins[2], HIGH);
-        }
-    }
-    SYS_EXIT_CRITICAL();
+    handleEmergencyStopMotion(); //Required by Motion.h
+    handleEmergencyPWMAndSensorStop(); //Required by PWMAndSensor.h
     client->text("EMG_ACK");
 }
 
+/**
+ * @brief Pauses execution for a specified duration in milliseconds (G-code Dwell equivalent).
+ * @param client Pointer to the active WebSocket client.
+ * @param payload Character string containing dwell time duration.
+ */
 void handleDwell(AsyncWebSocketClient *client, char* payload) {
     unsigned long dwellTime = atoi(payload);
     unsigned long startWait = millis();
@@ -316,89 +178,43 @@ void handleDwell(AsyncWebSocketClient *client, char* payload) {
     client->text("ACK");
 }
 
-void handleMotionPush(AsyncWebSocketClient *client, char* buffer) {
-    char* token = strtok(buffer, ",");
-    if (token == NULL) {
-        client->text("{\"status\":\"ERR_GCODE\"}");
-        return;
-    }
-
-    uint32_t t = (uint32_t)strtoul(token, NULL, 10);
-    std::vector<int32_t> stepsList;
-
-    while ((token = strtok(NULL, ",")) != NULL) {
-        stepsList.push_back((int32_t)atol(token));
-    }
-
-    if (t >= 0.0f) {
-        portENTER_CRITICAL(&ecsMux);
-        bool success = motionPipeline.push(t, stepsList);
-        size_t current_count = motionPipeline.count();
-        size_t h = motionPipeline.head;
-        size_t tl = motionPipeline.tail;
-        portEXIT_CRITICAL(&ecsMux);
-
-        bool is_warning = !success || (current_count > MOTION_BUFFER_SIZE - 64);
-        const char* statusStr = is_warning ? "BUF_FULL" : "ACK";
-
-        String json = "{\"status\":\"" + String(statusStr) +
-        "\", \"head\":" + String(h) +
-        ", \"tail\":" + String(tl) +
-        ", \"count\":" + String(current_count) +
-        ", \"size\":" + String(MOTION_BUFFER_SIZE) + "}";
-        client->text(json);
-
-    } else {
-        client->text("{\"status\":\"ERR_GCODE\"}");
-    }
-}
-
-void handleWebSocketMessage(AsyncWebSocketClient *client, void *arg, uint8_t *data, size_t len) {
-    AwsFrameInfo *info = (AwsFrameInfo*)arg;
-    if (!info->final || info->index != 0 || info->len != len || info->opcode != WS_TEXT) return;
-
-    if (len >= 2048) {
-        client->text("ERR_LEN");
-        return;
-    }
-
-    char buffer[2048];
-    memcpy(buffer, data, len);
-    buffer[len] = '\0';
-
-    if      (strncmp(buffer, "SAVE_CONFIG_JSON,", 17) == 0) handleSaveConfig(client, buffer + 17);
-    else if (strcmp(buffer, "GFG_JSON") == 0)              handleGetConfig(client);
-    else if (strncmp(buffer, "SET_PWM,", 8) == 0)          handleSetPWM(client, buffer + 8);
-    else if (strncmp(buffer, "HOME,", 5) == 0)             handleHome(client, buffer + 5);
-    else if (strncmp(buffer, "GPIO,", 5) == 0)             handleGpio(client, buffer + 5);
-    else if (strcmp(buffer, "EMG_STOP") == 0)              handleEmergencyStop(client);
-    else if (strcmp(buffer, "R_MCU") == 0)                 { delay(50); ESP.restart(); }
-    else if (strncmp(buffer, "DWELL,", 6) == 0)            handleDwell(client, buffer + 6);
-    else                                                   handleMotionPush(client, buffer);
-}
-
+/**
+ * @brief Global AsyncWebSocket event callback hook.
+ */
 void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len) {
-    if (type == WS_EVT_DATA) {
-        handleWebSocketMessage(client, arg, data, len);
+    switch (type) {
+        case WS_EVT_CONNECT:
+            break;
+
+        case WS_EVT_DISCONNECT:
+            break;
+
+        case WS_EVT_DATA: {
+            AwsFrameInfo *info = (AwsFrameInfo*)arg;
+            if (!info->final || info->index != 0 || info->len != len || info->opcode != WS_TEXT) return;
+
+            if (len >= 2048) {
+                client->text("ERR_LEN");
+                return;
+            }
+
+            char buffer[2048];
+            memcpy(buffer, data, len);
+            buffer[len] = '\0';
+
+            if      (strncmp(buffer, "SAVE_CONFIG_JSON,", 17) == 0) handleSaveConfig(client, buffer + 17);
+            else if (strcmp(buffer, "GFG_JSON") == 0)             handleGetConfig(client);
+            else if (strncmp(buffer, "SET_PWM,", 8) == 0)         handleSetPWM(client, buffer + 8);
+            else if (strncmp(buffer, "HOME,", 5) == 0)             handleHome(client, buffer + 5);
+            else if (strncmp(buffer, "GPIO,", 5) == 0)             handleGpio(client, buffer + 5);
+            else if (strcmp(buffer, "EMG_STOP") == 0)             handleEmergencyStop(client);
+            else if (strcmp(buffer, "R_MCU") == 0)                { delay(50); ESP.restart(); }
+            else if (strncmp(buffer, "DWELL,", 6) == 0)           handleDwell(client, buffer + 6);
+            else                                                  handleMotionPush(client, buffer);
+            break;
+        }
+
+        default:
+            break;
     }
-}
-
-inline void initNetwork(const char* ssid, const char* password) {
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(ssid, password);
-
-    Serial.print("Connecting to Wi-Fi");
-    while (WiFi.status() != WL_CONNECTED) {
-        delay(500);
-        Serial.print(".");
-    }
-
-    Serial.println("\nWi-Fi Connected Successfully!");
-    Serial.print("Printer IP Address: ");
-    Serial.println(WiFi.localIP());
-
-    server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
-    ws.onEvent(onEvent);
-    server.addHandler(&ws);
-    server.begin();
 }
